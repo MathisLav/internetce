@@ -1,8 +1,8 @@
 /**
  *--------------------------------------
- * Lib Name: INTERNET
+ * Lib Name: webgtrce
  * Author: Mathis Lavigne aka Epharius
- * License: 
+ * License:
  * Description: This librairy aim at allowing any program to access the internet.
  *--------------------------------------
  */
@@ -14,208 +14,32 @@
 #include <stdbool.h>
 #include <string.h>
 #include <usbdrvce.h>
+#include "../include/webgtrce.h"
 
 
-#define DEVICE			0x00
-#define RNDIS_SUBCLASS	0x01
-#define RNDIS_PROTOCOL	0x03
-
-#define RNDIS_PACKET_MSG 	0x00000001
-#define RNDIS_INIT_MSG		0x00000002
-#define RNDIS_INIT_CMPLT	0x80000002
-#define RNDIS_SET_MSG		0x00000005
-typedef struct rndis_init_msg {
-	uint32_t MessageType;		/**< RNDIS_INIT_MSG  */
-	uint32_t MessageLength;		/**< 24  			*/
-	uint32_t RequestId;
-	uint32_t MajorVersion;
-	uint32_t MinorVersion;
-	uint32_t MaxTransferSize;
-} rndis_init_msg_t;
-typedef struct rndis_set_msg {
-	uint32_t MessageType;		/**< RNDIS_INIT_MSG  */
-	uint32_t MessageLength;		/**< 32  			*/
-	uint32_t RequestId;
-	uint32_t Oid;
-	uint32_t InformationBufferLength;
-	uint32_t InformationBufferOffset;
-	uint32_t DeviceVcHandle;	/**< 0 				*/
-	uint32_t OidValue;			/**< Oid value sent along with the message */
-} rndis_set_msg_t;
-typedef struct rndis_packet_msg {
-	uint32_t MessageType;		/**< RNDIS_PACKET_MSG */
-	uint32_t MessageLength;
-	uint32_t DataOffset;
-	uint32_t DataLength;
-	uint32_t OOBDataOffset;
-	uint32_t OOBDataLength;
-	uint32_t NumOOBDataElements;
-	uint32_t PerPacketInfoOffset;
-	uint32_t PerPacketInfoLength;
-	uint32_t VcHandle;		/**< Must be 0 */
-	uint32_t Reserved;		/**< Must be 0 */
-	/* Your data must be here /void data;/ */
-} rndis_packet_msg_t;
-typedef struct rndis_device {
-	usb_device_t device;
-	uint8_t router_MAC_addr[6];
-	uint32_t DHCP_IP_addr;
-	uint32_t DNS_IP_addr;
-	bool connected;
-	bool enabled;
-	uint8_t int_cdc;
-	uint8_t int_wc;
-	uint8_t ep_cdc;
-	uint8_t ep_wc;
-} rndis_device_t;
-
-typedef struct eth_frame {
-	uint8_t MAC_dst[6];
-	uint8_t MAC_src[6];		/**< MAC_ADDR		*/
-	uint16_t Ethertype;		/**< 0x0800 : IPv4	*/
-	/* Your data must be here /void data;/ */
-	uint32_t crc;
-} eth_frame_t;
-typedef struct ipv4_packet { // MSB First
-	uint8_t VerIHL;			/**< 0x45			*/
-	uint8_t ToS;			/**< often 0		*/
-	uint16_t TotalLength;	/**< less than 65K but MTU is often 576B (minimal required value) */
-	uint16_t Id;			/**< Identification of a fragment */
-	uint16_t FlagsFragmentOffset; /**< The first 3 bits are flags. The following bits are Fragment Offset */
-	uint8_t TTL;			/**< Time To Live	*/
-	uint8_t Protocol;		/**< TCP=0x06; UDP=0x11; ICMP=0x01 */
-	uint16_t HeaderChecksum;/**< Checksum of this header */
-	uint32_t IP_addr_src;
-	uint32_t IP_addr_dst;
-	/* Your data must be here /void data;/ */
-} ipv4_packet_t;
-typedef struct ipv6_packet {
-	uint32_t VerTCFL;		/**< Version 4b (=6), Trafic class 8b, Flow Label 20b */
-	uint16_t PayloadLength;
-	uint8_t NextHeader;
-	uint8_t HopLimit;
-	uint8_t IP_addr_src[16];
-	uint8_t IP_addr_dst[16];
-	/* Your data must be here /void data;/ */
-} ipv6_packet_t;
-typedef struct udp_packet {
-	uint16_t port_src;
-	uint16_t port_dst;
-	uint16_t length;
-	uint16_t checksum;
-} udp_packet_t;
-typedef struct dhcp_message {
-	uint8_t op; 	/**< 0x01 for us, 0x02 for the dhcp server */
-	uint8_t htype;	/**< 0x01 */
-	uint8_t hlen;	/**< 0x06 */
-	uint8_t hops;	/**< 0x00 */
-	uint32_t xid;	/**< Transaction ID */
-	uint16_t secs;	
-	uint16_t flags;	
-	uint32_t ciaddr;
-	uint32_t yiaddr;
-	uint32_t siaddr;
-	uint32_t giaddr;
-	uint8_t chaddr[16];/**< For MAC addrs, only the 6 first bytes are used */
-	uint8_t zeros[192];/**< 0x00 */
-	uint32_t magicCookie;/**< 0x63825363 */
-	/* Options /void options;/ */
-	// Must be 0xFF terminated
-} dhcp_message_t;
-typedef struct dns_query {
-	uint16_t id;
-	uint16_t flags;
-	uint16_t questions;
-	uint16_t answerRRs;
-	uint16_t authorityRRs;
-	uint16_t additionalRRs;
-	// queries
-	// answers
-	// authority
-	// additional
-} dns_query_t;
-typedef struct tcp_segment {
-	uint16_t port_src;
-	uint16_t port_dst;
-	uint32_t seq_number;
-	uint32_t ack_number;
-	uint16_t dataOffset_flags;
-	uint16_t windowSize;
-	uint16_t checksum;
-	uint16_t urgentPointer;
-	uint8_t options[];
-} tcp_segment_t;
-
-#define ipv6_addr		uint8_t*	
-
-
-#define ETH_IPV4		0x0008		/* big endian stored */
-
-#define ICMP_PROTOCOL	0x01
-#define TCP_PROTOCOL	0x06
-#define UDP_PROTOCOL	0x11
-
-#define SERVER_DHCP_PORT	67
-#define CLIENT_DHCP_PORT	68
-#define DNS_PORT			53
-#define HTTP_PORT			80
-#define TCP_PORT			443
-
-#define ERROR_DHCP_NACK		01
-
-#define MAX_SEGMENT_SIZE	536		/* Default MSS */
-#define TCP_WINDOW_SIZE		MAX_SEGMENT_SIZE*2 /* Considering the calculator is pretty slow */
-
-#define FLAG_TCP_FIN	1 << 0
-#define FLAG_TCP_SYN	1 << 1
-#define FLAG_TCP_ACK	1 << 4
-
-
-
-usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst);
-usb_error_t receive_tcp_segment(tcp_segment_t **tcp_segment, size_t *length, uint32_t expected_ip, rndis_device_t *device);
-uint32_t send_dns_request(const char *addr, rndis_device_t *device);
-usb_error_t dhcp_ip_request(rndis_device_t *device);
-usb_error_t send_dhcp_request(uint8_t *data, size_t length, rndis_device_t *device);
-void tcp_encpsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t ack_number, uint16_t flags);
-uint16_t tcp_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst);
-void udp_encapsulate(uint8_t **data, size_t *length, uint16_t port_src, uint16_t port_dst);
-void send_icmpv6_init_message(rndis_device_t device);
-void ipv6_encapsulate(uint8_t **data, size_t *length, ipv6_addr ip_src, ipv6_addr ip_dst);
-void ipv4_encapsulate(uint8_t **data, size_t *length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol);
-uint16_t ipv4_checksum(uint16_t *header, size_t length);
-void ethernet_encapsulate(uint8_t **data, size_t *length, rndis_device_t *device);
-uint32_t crc32b(uint8_t *data, size_t length);
-usb_error_t rndis_send_packet(uint8_t **data, size_t *length, rndis_device_t *device);
-usb_error_t rndis_init(rndis_device_t *device);
-uint32_t getMyIPAddr();
-static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t *device);
-static usb_error_t transfer_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *completed);
-static void debug(void *addr, size_t len);
-static void disp(unsigned int val);
 static uint8_t MAC_ADDR[6] = {0xDA, 0xA5, 0x59, 0x9b, 0x71, 0xa8};
 static uint32_t IP_ADDR = 0;
-static uint32_t seq_number = 0x12345678; // first client segment's sequence number (for TCP)
 
 /*************************************************************\
  * à terme : - renvoyer les packets aux bout d'un certain temps
- *			 notamment dhcp qui fait souvent de la merde
- *			 - choisir seq_number aleatoirement
- *			 - 
+ *			 notamment dhcp qui fait souvent de la merde.
+ *			 - choisir seq_number aleatoirement.
+ *			 - Le permier dns answer est pas forcément le bon (cf tiplanet)
+ *			 il faudra donc affiner la requête DNS.
+ *			 - Mettre device en variable globale plutôt.
 \*************************************************************/
 
-int main(void)
-{
+int main(void) {
 	rndis_device_t device;
 	usb_error_t ret_err;
 
 	os_ClrHome();
 	boot_NewLine();
-	os_PutStrFull("RNDIS : Connection...");
-	boot_NewLine();
+	os_PutStrFull("RNDIS Connection... ");
 	
 	ret_err = rndis_init(&device);
 	if(ret_err != USB_SUCCESS) {
+		boot_NewLine();
 		if(ret_err == USB_ERROR_NOT_SUPPORTED) {
 			os_PutStrFull("Device not compatible...");
 			boot_NewLine();
@@ -227,38 +51,34 @@ int main(void)
 		while(!os_GetCSC()) {}
 		goto _end;
 	}
-	os_PutStrFull("RNDIS : Connected!");
+	os_PutStrFull("Done!");
 	boot_NewLine();
 
-	// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS
+	// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS - ARP
 	// Maintenant : TCP -> HTTP
 
-	// Ok donc j'ai résolu le bug... je me sens hyper con, le problème c'était ETH_IPV4
-	// Mais bref, même si ça dit pas trop pourquoi ça marchait une fois sur 2 ça c'est fait.
-	// Enfin, si tout était réglé ce serait trop facile : J'envoie une requête TCP SYN mais pas de réponse
-	// ça peut venir du fait que ip_dst a une valeur cheloue (pourtant quand je debug(data) c'est une bonne valeur...)
+	// Attention, DNS fournit des résultats pas forcément dans le premier answer
+	// CF "à termes" (où il faudra aussi gérer les erreurs dns et renvoyer la requête)
+
+	// Fonctionne pas. Vérifier que j'envoie le bon paquet (notamment tcp checksum)
+	// Par contre le init_tcp_session a l'air de fonctionner. (à voir pour le ack mais normalement c'est bon vu qu'il ne me renvoie pas son paquet)
+	// Pas d'autres idées si ce n'est ça.
 
 
-	os_PutStrFull("Requesting IP address...");
-	boot_NewLine();
+	os_PutStrFull("DHCP Request...     ");
 	ret_err = dhcp_ip_request(&device);
 	//if(ret_err != USB_SUCCESS) -> ne fonctionne pas ?
 	//	goto _end;
 	os_PutStrFull("Done!");
 	boot_NewLine();
-	os_PutStrFull("DNS Request...");
-	boot_NewLine();
-	uint32_t ip = 0;
-	ip = send_dns_request("www.google.fr", &device);
-	os_PutStrFull("Done!");
-	boot_NewLine();
-	os_PutStrFull("TCP SYN...");
-	boot_NewLine();
-	init_tcp_session(&device, ip);
+	os_PutStrFull("HTTP Request...     ");
+	HTTPGet("www.perdu.com", NULL, &device);
 	os_PutStrFull("Done!");
 	boot_NewLine();
 
 	// The End.
+	boot_NewLine();
+	os_PutStrFull("Waiting for keypress...");
 	_end:
 	while(!os_GetCSC())
 		usb_WaitForInterrupt();
@@ -267,9 +87,7 @@ int main(void)
 }
 
 
-usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst) {
 	// Bon c'est cool tous les problèmes de merdes précédents ont été résolus.
-	// Là faudrait juste checksum la réponse (oui la lib est minimaliste mais c'est le minimum)
 	// Ce qui est moins cool c'est ce qui va venir... eh oui entre autre la window size !
 	// Ça pose plein de question sur comment je vais fonctionner et jusqu'où va aller la lib :
 	//		est-ce que j'autorise une window size assez grande ou je fonctionne en segment->ack ?
@@ -305,78 +123,148 @@ usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst) {
 	//			*	Prévenir le serveur (ne pas ACK) en cas de segment erronné
 	//
 
+
+usb_error_t HTTPGet(const char* url, void **data, rndis_device_t *device) {
+	// à terme, mettre le seq_num dans un structure genre "tcp_request" avec seq_num, ack_num, ip_dst, src_port...
+	// Différent pour chaque requête.
+	static uint32_t seq_number = 0x12345678; // first client segment's sequence number
+	bool uri;
+	const char *http_str = "http://";
+	if(!memcmp(url, http_str, 7)) /* Ignoring http:// */
+		url += 7;
+
+	size_t websitelen = 0;
+	while(*(url+websitelen) != '/' && *(url+websitelen) != 0x00)
+		websitelen++;
+
+	uri = (bool)*(url+websitelen); /* '/' or 0x00 ? */
+
+	/* Formatting website name */
+	char *websitename = malloc(websitelen+1);
+	memcpy(websitename, url, websitelen);
+	websitename[websitelen] = 0x00;
+	uint32_t ip = send_dns_request(websitename, device);
+	uint32_t server_sn;
+	init_tcp_session(device, ip, 0xec87, &seq_number, &server_sn);
+
+	/* Building HTTP request */
+	size_t length = 4 + !uri + 11 + 6 + strlen(url) + 4; // 4="GET ", 10=" HTTP/1.1\r\n", 6="Host: ", 4="\r\n\r\n"
+	char *request = malloc(length);
+	sprintf(request, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", uri ? url+websitelen : "/", websitename);
+	free(websitename);
+
+	/* Sending HTTP request */
+	tcp_encapsulate((uint8_t**)&request, &length, ip, 0xec87, HTTP_PORT, seq_number, server_sn, FLAG_TCP_ACK|FLAG_TCP_PSH);
+	seq_number += length;
+	ipv4_encapsulate((uint8_t**)&request, &length, IP_ADDR, ip, TCP_PROTOCOL);
+	ethernet_encapsulate((uint8_t**)&request, &length, device);
+	rndis_send_packet((uint8_t**)&request, &length, device);
+	free(request);
+
+	/* Receiving HTTP response */
+	reassemble_tcp_segments(data, ip, &seq_number, device);
+
+	//close_tcp_session(ip, device);
+	return USB_SUCCESS;
+}
+
+
+http_status_t reassemble_tcp_segments(void **data, uint32_t expected_ip, uint32_t *cur_sn, rndis_device_t *device) {
+	tcp_segment_list_t segment_list = NULL;
+	tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); // The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes)
+	size_t length;
+	usb_error_t code_err;
+	size_t content_length = 0;
+	size_t content_received = 0;
+	do {
+		code_err = receive_tcp_segment(&response, &length, expected_ip, device);
+		
+	} while((content_length || (!content_length && content_length!=content_received)) && code_err != USB_IGNORE);
+	return USB_SUCCESS;
+}
+
+usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst, uint16_t src_port, uint32_t *fsn, uint32_t *next_ack) {
 	/* Handshaking... */
 	/* SYN */
-	debug(&ip_dst, 4);
-	while(!os_GetCSC()) {}
-
 	uint8_t *data = NULL;
 	size_t length = 0;
-	tcp_encpsulate(&data, &length, ip_dst, 0xec50, TCP_PORT, 0, FLAG_TCP_SYN);
+	tcp_encapsulate(&data, &length, ip_dst, src_port, HTTP_PORT, (*fsn)++, 0, FLAG_TCP_SYN);
 	ipv4_encapsulate(&data, &length, IP_ADDR, ip_dst, TCP_PROTOCOL);
 	ethernet_encapsulate(&data, &length, device);
-	//os_ClrHome();
-	//boot_NewLine();
-	//debug(data, 72);
-	//while(!os_GetCSC()) {}
-	//os_ClrHome();
-	//boot_NewLine();
-	//debug(data+72, 72);
-	//while(!os_GetCSC()) {}
-	usb_error_t ret_err = rndis_send_packet(&data, &length, device);
+	rndis_send_packet(&data, &length, device);
 	free(data);
 
 	/* SYN ACK */
 	tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); // The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes)
 	receive_tcp_segment(&response, &length, ip_dst, device);
-	if(/*tcp_checksum((uint8_t*)response, length, ip_dst, IP_ADDR) ||*/ !(response->dataOffset_flags&0x0200) || !(response->dataOffset_flags&0x1000)) {
-		os_PutStrFull("SYN ACK FAILED");
-		boot_NewLine();
+	if(!(response->dataOffset_flags&0x0200) || !(response->dataOffset_flags&0x1000))
 		return USB_ERROR_FAILED;
-	}
-	uint16_t test = tcp_checksum((uint8_t*)response, length, ip_dst, IP_ADDR);
-	debug(&test, 2);
 
 	/* ACK */
 	length = 0;
 	data = NULL;
-	tcp_encpsulate(&data, &length, ip_dst, 0xec50, TCP_PORT, response->seq_number+1, FLAG_TCP_ACK);
+	tcp_encapsulate(&data, &length, ip_dst, src_port, HTTP_PORT, *fsn, getBigEndianValue((uint8_t*)&response->seq_number)+1, FLAG_TCP_ACK);
+	ipv4_encapsulate(&data, &length, IP_ADDR, ip_dst, TCP_PROTOCOL);
+	ethernet_encapsulate(&data, &length, device);
+	rndis_send_packet(&data, &length, device);
+	free(data);
 	free(response);
+
+	if(next_ack)
+		*next_ack = getBigEndianValue((uint8_t*)&response->seq_number)+1;
 	return USB_SUCCESS;
 }
 
 usb_error_t receive_tcp_segment(tcp_segment_t **tcp_segment, size_t *length, uint32_t expected_ip, rndis_device_t *device) {
-	uint8_t resp[MAX_SEGMENT_SIZE+100];
+	/**
+	 *	Checks the checksum.
+	 */
+	uint8_t resp[MAX_SEGMENT_SIZE+180];
 	size_t len;
 	while(!os_GetCSC()) {
-		usb_Transfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), resp, MAX_SEGMENT_SIZE+100, 3, &len);
+		usb_Transfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), resp, MAX_SEGMENT_SIZE+180, 1, &len);		
 		// Il manque l'info len qui est donnée dans le callback
 		//transferred = false;
-		//usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), resp, MAX_SEGMENT_SIZE+100, transfer_callback, &transferred);
+		//usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), resp, MAX_SEGMENT_SIZE+180, transfer_callback, &transferred);
 		//do {
 		//	usb_WaitForInterrupt();
 		//	key = os_GetCSC();
 		//} while(!key && !transferred);
-
 		const eth_frame_t *ethernet_frame = (eth_frame_t*)(resp + sizeof(rndis_packet_msg_t));
 		if(!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6)) { // if it's for us (broadcast messages aren't interesting here)
-			os_PutStrFull("eth");
 			if(ethernet_frame->Ethertype == ETH_IPV4) {
-				os_PutStrFull("ip");
 				const ipv4_packet_t *ipv4_pckt = (ipv4_packet_t*)((uint8_t*)ethernet_frame+sizeof(eth_frame_t)-4); // -4=-crc
 				if(ipv4_pckt->IP_addr_src == expected_ip && ipv4_pckt->Protocol == TCP_PROTOCOL) {
-					os_PutStrFull("tcp");
 					const tcp_segment_t *tcp_seg = (tcp_segment_t*)((uint8_t*)ipv4_pckt + (ipv4_pckt->VerIHL&0x0F)*4);
-					if(tcp_seg->port_src/256 == TCP_PORT%256 && tcp_seg->port_src%256 == TCP_PORT/256) {
-						*length = len-sizeof(rndis_packet_msg_t)-sizeof(eth_frame_t)+4-(ipv4_pckt->VerIHL&0x0F)*4;
+					uint16_t seg_len = len-sizeof(rndis_packet_msg_t)-sizeof(eth_frame_t)+4-(ipv4_pckt->VerIHL&0x0F)*4;
+					if(!tcp_checksum((uint8_t*)tcp_seg, seg_len, expected_ip, IP_ADDR) && tcp_seg->port_src/256 == HTTP_PORT%256 && tcp_seg->port_src%256 == HTTP_PORT/256) {
+						*length = seg_len;
 						memcpy(*tcp_segment, tcp_seg, *length);
 						return USB_SUCCESS;
 					}
 				}
 			}
 		}
+		if((!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(ethernet_frame->MAC_dst)) && ethernet_frame->Ethertype == ETH_ARP)
+			send_arp_reply(resp, device);
 	}
 	return USB_IGNORE;
+}
+
+
+void send_arp_reply(uint8_t *rndis_packet, rndis_device_t *device) {
+	eth_frame_t *ethernet_frame = (eth_frame_t*)(rndis_packet + sizeof(rndis_packet_msg_t));
+	arp_message_t *arp_msg = (arp_message_t*)((uint8_t*)ethernet_frame + sizeof(eth_frame_t) - 4);
+	if(ethernet_frame->Ethertype != ETH_ARP || arp_msg->HwType != 0x0100 || arp_msg->Operation != 0x0100 || arp_msg->ProtocolType != ETH_IPV4 || arp_msg->IP_dst != IP_ADDR)
+		return;
+	memcpy(ethernet_frame->MAC_dst, ethernet_frame->MAC_src, 6);
+	memcpy((uint8_t*)ethernet_frame->MAC_src, MAC_ADDR, 6);
+	memcpy((uint8_t*)arp_msg->MAC_dst, (uint8_t*)arp_msg->MAC_src, 10);
+	memcpy((uint8_t*)arp_msg->MAC_src, MAC_ADDR, 6);
+	arp_msg->IP_src = IP_ADDR;
+	arp_msg->Operation = 0x0200;
+
+	usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, device->ep_cdc), rndis_packet, sizeof(rndis_packet_msg_t) + sizeof(eth_frame_t)-4 + sizeof(arp_message_t), NULL, NULL);
 }
 
 
@@ -411,11 +299,20 @@ uint32_t send_dns_request(const char *addr, rndis_device_t *device) {
 	usb_error_t ret_err = rndis_send_packet(&query, &length, device);
 	free(query);
 	if(ret_err)
-		return -1;
+		return ret_err;
 
 	uint8_t answer[512];
-	while(!os_GetCSC()) {
-		usb_Transfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), answer, 512, 3, NULL);
+	bool transferred;
+	int key = 0;
+	while(!key) {
+		//usb_Transfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), answer, 512, 3, NULL);
+		transferred = false;
+		usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), answer, 512, transfer_callback, &transferred);
+		do {
+			usb_WaitForInterrupt();
+			key = os_GetCSC();
+		} while(!key && !transferred);
+
 		const eth_frame_t *ethernet_frame = (eth_frame_t*)(answer + sizeof(rndis_packet_msg_t));
 		if(!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6)) { // if it's for us (broadcast messages aren't interesting here)
 			if(ethernet_frame->Ethertype == ETH_IPV4) {
@@ -425,6 +322,7 @@ uint32_t send_dns_request(const char *addr, rndis_device_t *device) {
 					if(udp_pckt->port_src/256 == DNS_PORT && udp_pckt->port_src%256 == 0x00) {
 						const dns_query_t *dns_qry = (dns_query_t*)((uint8_t*)udp_pckt + sizeof(udp_packet_t));
 						const uint8_t *resp = (uint8_t*)dns_qry + sizeof(dns_query_t) + (strlen(addr)+2+4);
+						
 						if((dns_qry->flags&0x8000) && (dns_qry->flags&0x0080) && !((dns_qry->flags&0x0F00) && *(resp+3)==0x01)) // if -it is a response -the recursion was available -no error occurred -the response is an IPv4 address
 							return *((uint32_t*)(resp+12)); // we only take into account of the first answer
 						else
@@ -433,6 +331,8 @@ uint32_t send_dns_request(const char *addr, rndis_device_t *device) {
 				}
 			}
 		}
+		if((!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(ethernet_frame->MAC_dst)) && ethernet_frame->Ethertype == ETH_ARP)
+			send_arp_reply(answer, device);
 	}
 	return USB_IGNORE;
 }
@@ -475,10 +375,16 @@ usb_error_t dhcp_ip_request(rndis_device_t *device) {
 	uint8_t response[512];
 	int key = 0;
 	bool transferred;
+	uint32_t time = ((rtc_Days*24+rtc_Hours)*60+rtc_Minutes)*60+rtc_Seconds;
 	while(!key && !completed && !dhcp_error) {
 		transferred = false;
 		usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, (device->ep_cdc)|0x80), response, 512, transfer_callback, &transferred);
 		do {
+			uint32_t cur_time = ((rtc_Days*24+rtc_Hours)*60+rtc_Minutes)*60+rtc_Seconds;
+			if(cur_time - time >= 2) {
+				time = cur_time;
+				send_dhcp_request(data_disc, length_disc, device);
+			}
 			usb_WaitForInterrupt();
 			key = os_GetCSC();
 		} while(!key && !transferred);
@@ -527,7 +433,6 @@ usb_error_t dhcp_ip_request(rndis_device_t *device) {
 		}
 	}
 	xid++;
-	//free(gogole);
 	free(data_disc);
 	free(data_req);
 	if(!completed) {
@@ -552,7 +457,7 @@ usb_error_t send_dhcp_request(uint8_t *data, size_t length, rndis_device_t *devi
 }
 
 
-void tcp_encpsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t ack_number, uint16_t flags) {
+void tcp_encapsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags) {
 	/**
 	 *	Encapsulates data with a TCP header.
 	 *	The current version is not able to break down data into several ipv4 packets.
@@ -585,13 +490,12 @@ void tcp_encpsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t po
 	(*data)[10] = ack_number/256;
 	(*data)[11] = ack_number%256;
 	if(flags&FLAG_TCP_SYN)
-		(*data)[12] = 0x70|(flags&0x0100);
+		(*data)[12] = 0x60|(flags&0x0100);
 	else
 		(*data)[12] = 0x50|(flags&0x0100);
 	(*data)[13] = flags&0x00FF;
 	(*data)[14] = TCP_WINDOW_SIZE/256;	/* window size */
 	(*data)[15] = TCP_WINDOW_SIZE%256;
-	((uint16_t*)*data)[9] = 0x0000;		/* urgent pointer */
 	
 	if(flags&FLAG_TCP_SYN) {
 		const uint8_t options[] = {0x02, 0x04, MAX_SEGMENT_SIZE/256, MAX_SEGMENT_SIZE%256};
@@ -604,6 +508,7 @@ void tcp_encpsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t po
 		*length += sizeof(tcp_segment_t)+4;
 	else
 		*length += sizeof(tcp_segment_t);
+	
 	uint16_t chksm = tcp_checksum(*data, *length, IP_ADDR, ip_dst);
 	(*data)[16] = chksm/256;
 	(*data)[17] = chksm%256;
@@ -648,27 +553,6 @@ void udp_encapsulate(uint8_t **data, size_t *length, uint16_t port_src, uint16_t
 }
 
 
-void send_icmpv6_init_message(rndis_device_t device) {
-	/**
-	 *	Sends an ICMPv6 message, in order to résoudre ce putain de bug.
-	 */
-	/*size_t length = 16*4+4;
-	uint8_t *msg = calloc(length, 1);
-	const uint8_t icmp_msg[] = {};
-	memcpy(msg, icmp_msg, sizeof(icmp_msg));
-
-	const uint32_t ip_src[] = {0, 0, 0, 0};
-	const uint8_t ip_dst[] = {0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x16};
-	const uint8_t brdcst_addr[] = {0x33, 0x33, 0, 0, 0, 0x16};
-	memcpy(device.router_MAC_addr, brdcst_addr, 6);
-	ipv6_encapsulate(&data, &length, (ipv6_addr)ip_src, (ipv6_addr)ip_dst);
-	ethernet_encapsulate(&data, &length, &device);
-	rndis_send_packet(&data, &length, &device);
-
-	free(msg);*/
-}
-
-
 void ipv6_encapsulate(uint8_t **data, size_t *length, ipv6_addr ip_src, ipv6_addr ip_dst) {
 	/**
 	 *	Encapsulates data with an IPv6 header.
@@ -708,7 +592,7 @@ void ipv4_encapsulate(uint8_t **data, size_t *length, uint32_t ip_src, uint32_t 
 	 */
 	static uint16_t nbpacket = 0;
 	const size_t size = *length+sizeof(ipv4_packet_t);
-	const ipv4_packet_t packet = {0x45, 0, 0, 0, 0, 0x80, 0, 0, 0, 0};
+	const ipv4_packet_t packet = {0x45, 0x10, 0, 0, 0x40, 0x80, 0, 0, 0, 0};
 	uint8_t *old_data = *data;
 	*data = malloc(size);
 	memcpy(*data, &packet, sizeof(ipv4_packet_t));
@@ -745,7 +629,7 @@ void ethernet_encapsulate(uint8_t **data, size_t *length, rndis_device_t *device
 	 *	@output data points to the data encapsulated. length points to the new length of *data.
 	 */
 	uint8_t *old_data = *data;
-	if(*length<46) // An ethernet frame must be at least 64B
+	if(*length<46) /* An ethernet frame must be at least 64B */
 		*data = calloc(64, 1);
 	else
 		*data = malloc(sizeof(eth_frame_t)+*length);
@@ -760,10 +644,8 @@ void ethernet_encapsulate(uint8_t **data, size_t *length, rndis_device_t *device
 	uint32_t crc = crc32b(*data, *length-4);
 	
 	memcpy(*data+*length-4, &crc, 4);
-	//(*data)[*length/4-1] = crc;
 	free(old_data);
 }
-
 
 #define CRC_POLY 0xEDB88320
 uint32_t crc32b(uint8_t *data, size_t length) {
@@ -817,12 +699,11 @@ usb_error_t rndis_send_packet(uint8_t **data, size_t *length, rndis_device_t *de
 	*length += sizeof(rndis_packet_msg_t);
 	free(old_data);
 
-	//ret_err = usb_Transfer(usb_GetDeviceEndpoint(device->device, device->ep_cdc), *data, *length, 3, &len);
 	bool completed = false;
 	ret_err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, device->ep_cdc), *data, *length, transfer_callback, &completed);
 	while(!os_GetCSC() && !completed)
 		usb_WaitForInterrupt();
-	
+
 	return ret_err;
 }
 
@@ -936,39 +817,23 @@ usb_error_t rndis_init(rndis_device_t *device) {
 		return USB_IGNORE;
 
 
-	/*uint8_t desc[512];
-	bool complete = false;
-	const usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
-	const usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 0x0400};
-	const uint8_t machin[] = {0x04, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-	complete = false;
-	memcpy(desc, &out_ctrl, sizeof(usb_control_setup_t));
-	desc[6] = 28; // wLength
-	memcpy(desc+sizeof(usb_control_setup_t), machin, sizeof(machin));
-	usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, 0), desc, 0, transfer_callback, &complete);
-	while(!os_GetCSC() && !complete)
-		usb_WaitForInterrupt();
-	if(!complete)
-		return USB_IGNORE;
-
-	memcpy(desc, &in_ctrl, sizeof(usb_control_setup_t));
-	complete = false;
-	usb_ScheduleTransfer(usb_GetDeviceEndpoint(device->device, 0), desc, 0, transfer_callback, &complete);
-	while(!os_GetCSC() && !complete)
-		usb_WaitForInterrupt();
-	if(!complete)
-		return USB_IGNORE;
-
-	os_ClrHome();
-	boot_NewLine();
-	debug(desc, 72);
-	while(!os_GetCSC()) {}*/
-
-
 	memset(&(device->router_MAC_addr), 0xFF, 6);
-	//srand(rtc_Time());
-	//MAC_ADDR[5] = randInt(0, 0xFF);
+	srand(rtc_Time());
+	MAC_ADDR[5] = randInt(0, 0xFF);
 	return USB_SUCCESS;
+}
+
+
+bool cmpbroadcast(const uint8_t *mac_addr) {
+	bool is_brdcst = true;
+	for(int i=0; i<6; i++)
+		is_brdcst = is_brdcst && *(mac_addr+i)==0xff;
+	return is_brdcst;
+}
+
+
+uint32_t getBigEndianValue(uint8_t *beVal) {
+	return beVal[0]*16777216 + beVal[1]*65536 + beVal[2]*256 + beVal[3];
 }
 
 
@@ -1003,7 +868,7 @@ static usb_error_t transfer_callback(usb_endpoint_t endpoint, usb_transfer_statu
 	//sprintf(tmp, "CALLBACK ! %u - %u ", status, transferred);
 	//os_PutStrFull(tmp);
 	//boot_NewLine();
-	if(!status)
+	if(!status && transferred)
 		*((bool*)completed) = true;
 	return USB_SUCCESS;
 }
