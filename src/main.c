@@ -60,11 +60,6 @@ int main(void) {
 	// Attention, DNS fournit des résultats pas forcément dans le premier answer
 	// CF "à termes" (où il faudra aussi gérer les erreurs dns et renvoyer la requête)
 
-	// Fonctionne pas. Vérifier que j'envoie le bon paquet (notamment tcp checksum)
-	// Par contre le init_tcp_session a l'air de fonctionner. (à voir pour le ack mais normalement c'est bon vu qu'il ne me renvoie pas son paquet)
-	// Pas d'autres idées si ce n'est ça.
-
-
 	os_PutStrFull("DHCP Request...     ");
 	ret_err = dhcp_ip_request(&device);
 	//if(ret_err != USB_SUCCESS) -> ne fonctionne pas ?
@@ -170,17 +165,46 @@ usb_error_t HTTPGet(const char* url, void **data, rndis_device_t *device) {
 
 
 http_status_t reassemble_tcp_segments(void **data, uint32_t expected_ip, uint32_t *cur_sn, rndis_device_t *device) {
-	tcp_segment_list_t segment_list = NULL;
+	tcp_segment_list_t *segment_list = NULL;
 	tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); // The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes)
 	size_t length;
 	usb_error_t code_err;
+	http_status_t ret_status;
 	size_t content_length = 0;
 	size_t content_received = 0;
 	do {
 		code_err = receive_tcp_segment(&response, &length, expected_ip, device);
-		
-	} while((content_length || (!content_length && content_length!=content_received)) && code_err != USB_IGNORE);
-	return USB_SUCCESS;
+		const char *http_response = (char*)response + 4*(response->dataOffset_flags>>4&0x0f);
+		if(content_length == 0 && !memcmp(http_response, "HTTP/1.1 ", 9)) {
+			/* Waiting for the HTTP response (mandatory for what happens next) */
+			ret_status = (http_response[9]-0x30)*100 + (http_response[10]-0x30)*10 + (http_response[11]-0x30);
+			if(ret_status != HTTP_STATUS_OK)
+				break;
+			/* Searching for Content-Length field */
+			const char *ptr = http_response;
+			const char cont_len[] = "Content-Length:";
+			while(ptr-http_response<(int)length && memcmp(ptr, cont_len, 15)) {
+				while(ptr-http_response<(int)length && (*ptr != 0x0d || *(ptr+1) != 0x0a)) ptr++;
+				ptr += 2;
+			}
+			if(ptr-http_response>=(int)length)
+				return HTTP_STATUS_LENGTH_REQUIRED;
+			ptr += 16;
+			while(*ptr >= 0x30 && *ptr <= 0x39) {
+				content_length = content_length*10 + (*ptr-0x30);
+				ptr++;
+			}
+			// Parcourir jusqu'au 0d0a0d0a ? Au moins ajouter le segment à la liste chainée
+		}
+
+		// Du coup j'ai récup le content-length
+		// Ce qu'il faut faire mtn c'est récup chaque segment les uns après les autres et les ajouter à la liste au bon endroit
+		// Puis ACK quand c'est possible d'ack
+		// ATTENTION : la première partie du content est à la suite du HTTP header. Il faut donc le prendre en compte.
+		// Ne pas non plus oublier d'ack aussi le segment de la réponse HTTP.
+
+	} while((!content_length || (content_length && content_length!=content_received)) && code_err != USB_IGNORE);
+	return ret_status;
 }
 
 usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst, uint16_t src_port, uint32_t *fsn, uint32_t *next_ack) {

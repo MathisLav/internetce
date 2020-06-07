@@ -168,6 +168,7 @@ typedef enum http_status {
 	HTTP_STATUS_FORBIDDEN = 403,
 	HTTP_STATUS_NOT_FOUND = 404,
 	HTTP_STATUS_NOT_ACCEPTABLE = 406,
+	HTTP_STATUS_LENGTH_REQUIRED = 411,
 	HTTP_STATUS_TOO_MANY_REQUEST = 429,
 	HTTP_STATUS_INTERNAL_SERVER_ERROR = 500,
 	HTTP_STATUS_BAD_GATEWAY = 502,
@@ -203,7 +204,7 @@ typedef enum http_status {
 
 
 usb_error_t HTTPGet(const char* url, void **data, rndis_device_t *device);
-http_status_t reassemble_tcp_segments(void **data, uint32_t expected_ip, uint32_t cur_sn, rndis_device_t *device);
+http_status_t reassemble_tcp_segments(void **data, uint32_t expected_ip, uint32_t *cur_sn, rndis_device_t *device);
 usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst, uint16_t src_port, uint32_t *fsn, uint32_t *next_ack);
 usb_error_t receive_tcp_segment(tcp_segment_t **tcp_segment, size_t *length, uint32_t expected_ip, rndis_device_t *device);
 void send_arp_reply(uint8_t *rndis_packet, rndis_device_t *device);
