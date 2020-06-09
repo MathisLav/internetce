@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <usbdrvce.h>
+#include <stdarg.h>
 #include "../include/webgtrce.h"
 
 
@@ -27,6 +28,7 @@ static uint32_t IP_ADDR = 0;
  *			 - Le permier dns answer est pas forcément le bon (cf tiplanet)
  *			 il faudra donc affiner la requête DNS.
  *			 - Mettre device en variable globale plutôt.
+ *			 - Ajouter un checksum à UDP
 \*************************************************************/
 
 int main(void) {
@@ -54,11 +56,34 @@ int main(void) {
 	os_PutStrFull("Done!");
 	boot_NewLine();
 
-	// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS - ARP
-	// Maintenant : TCP -> HTTP
+	// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS - ARP - TCP
+	// Maintenant : HTTP
 
 	// Attention, DNS fournit des résultats pas forcément dans le premier answer
 	// CF "à termes" (où il faudra aussi gérer les erreurs dns et renvoyer la requête)
+
+
+	// Yeah ! Il faut que je communique ma joie parce que j'suis vraiment trop fort !
+	// HTTPGet et HTTPPost ont l'air de fonctionner !!!
+	// Il manque donc plus qu'à résoudre les cas particuliers (wikipedia entre autre, google ce serait pas mal) et tout est bon !
+	// Une fois que les cas particuliers seront gérés (dont le prbl dns) ça part en close_connection puis "globalité" !
+	// J'ai presque fini ! (enfin, je crois ?)
+
+
+	// Du coup :
+	// Normalement tout fonctionne à peu près
+	// il faut encore :
+	//	- résoudre le petit prbl avec wikipédia, j'ai l'impression de ne rien recevoir (mauvais dns ? pourtant j'init bien)
+	//	- tester dans tout plein de situations
+	//	- corriger le truc DNS (CF plus haut)
+	
+	// Puis dans un second temps :
+	//	- close_connection
+	//	- faire le truc de "globalité" (appeler reassemble en tant que callback)
+	//	- chercher pourquoi on arrive pas à récup google.com (RAM CLEAR au bout d'un certain temps)
+	//	- lease IP
+	//	- regarder "à termes" si y'a d'autres choses... 
+
 
 	os_PutStrFull("DHCP Request...     ");
 	ret_err = dhcp_ip_request(&device);
@@ -67,7 +92,15 @@ int main(void) {
 	os_PutStrFull("Done!");
 	boot_NewLine();
 	os_PutStrFull("HTTP Request...     ");
-	HTTPGet("www.perdu.com", NULL, &device);
+	char *data = NULL;
+	size_t len;
+	HTTPPost("www.perdu.com", (void**)&data, &len, false, &device, 2, "Joyeux", "Noel", "La", "Bise");
+	while(!os_GetCSC()) {}
+	os_ClrHome();
+	os_PutStrFull(data);
+	while(!os_GetCSC()) {}
+	if(data)
+		free(data);
 	os_PutStrFull("Done!");
 	boot_NewLine();
 
@@ -81,20 +114,12 @@ int main(void) {
 	return 0;
 }
 
-
-	// Bon c'est cool tous les problèmes de merdes précédents ont été résolus.
-	// Ce qui est moins cool c'est ce qui va venir... eh oui entre autre la window size !
-	// Ça pose plein de question sur comment je vais fonctionner et jusqu'où va aller la lib :
 	//		est-ce que j'autorise une window size assez grande ou je fonctionne en segment->ack ?
 	//		je renvoie un paquet au bout de combien de temps ?
 	//		comment je gère une erreur (checksum ou ack_number etc) ?
 	//		est-ce que je gère la possibilité d'envoyer du multi-packet ?
 	//		est-ce que je fais aussi une vérification qu'il a bien renvoyé un bon ack (= notre seq_number) ?
 	//			faudra d'ailleurs pas oublier d'augmenter en conséquence notre sequence number juste ici...
-	// Bref, TCP est de loin le protocole le plus complexe, devant IP, DHCP ou même HTTP.
-	// A moi de choisir si je fais ça proprement ou pas (surement un truc entre les deux à définir).
-	//
-	// Note : Ce serait bien de se renseigner sur le site avec un nom du genre "tout sur tcp/ip" (voir tel.).
 
 	// CDC Personnel (à restreindre ou à élargir en fonction)
 	//  *	crucial
@@ -102,26 +127,58 @@ int main(void) {
 	// ~*~	facultatif
 	//
 	//		- ORGANISER une connexion
-	//			 * 	Gérer les SYN, SYN/ACK, ACK du début de connexion
-	//			(*)	Renvoyer un segment au bout d'un certain temps
-	//			(*)	Terminer une connexion (FIN, FIN/ACK *2)
-	//			~*~	Permettre la communication simultanée de plusieurs applications (utile seulement si la lib ne bloque pas l'application)
+	//	->		 * 	Gérer les SYN, SYN/ACK, ACK du début de connexion
+	//	_		(*)	Renvoyer un segment au bout d'un certain temps
+	//	_		(*)	Terminer une connexion (FIN, FIN/ACK *2)
+	//	_		~*~	Permettre la communication simultanée de plusieurs applications (utile seulement si la lib ne bloque pas l'application)
 	//
 	//		- ASSURER la réception des segments
-	//			* Remettre les segments dans l'ordre, malgré leur arrivée asynchrone
-	//			* Avoir un assez gros buffer pour recevoir un segment de taille maximale
-	//				(Le buffer pour recevoir le fichier entier est à la charge de l'utilisateur)
-	//			* ACK le serveur en bonne et due forme
+	//	->		* Remettre les segments dans l'ordre, malgré leur arrivée asynchrone
+	//	->		* Avoir un assez gros buffer pour recevoir un segment de taille maximale
+	//	->		* ACK le serveur en bonne et due forme
 	//
 	//		- VERIFIER la conformité de la réponse
-	//			*	Vérifier le checksum
-	//			*	Prévenir le serveur (ne pas ACK) en cas de segment erronné
+	//	->		*	Vérifier le checksum
+	//	->		*	Prévenir le serveur (ne pas ACK) en cas de segment erronné
 	//
 
 
-usb_error_t HTTPGet(const char* url, void **data, rndis_device_t *device) {
+http_status_t HTTPGet(const char* url, void **data, size_t *transferred, bool keep_http_header, rndis_device_t *device) {
 	// à terme, mettre le seq_num dans un structure genre "tcp_request" avec seq_num, ack_num, ip_dst, src_port...
 	// Différent pour chaque requête.
+	char null_pointer = 0x00;
+	return http_request("GET", url, data, transferred, keep_http_header, device, &null_pointer);
+}
+
+http_status_t HTTPPost(const char* url, void **data, size_t *transferred, bool keep_http_header, rndis_device_t *device, int nb_params, ...) {
+	if(nb_params == 0) {
+		char null_pointer = 0x00;
+		return http_request("POST", url, data, transferred, keep_http_header, device, &null_pointer);
+	}
+	size_t param_len = 0;
+	char *params = malloc(1); /* To be reallocated */
+	va_list list_params;
+	va_start(list_params, nb_params);
+	for(uint8_t i=0; i<nb_params*2; i+=2) {
+		const char *arg_name = va_arg(list_params, const char*);
+		const char *arg_value = va_arg(list_params, const char*);
+		void *tmp = realloc(params, param_len+strlen(arg_name)+strlen(arg_value)+4+1); /* +1 for 0 terminated string */
+		if(!tmp) {
+			free(params);
+			return -1;
+		}
+		params = tmp;
+		sprintf(params+param_len, "%s: %s\r\n", arg_name, arg_value);
+		param_len += strlen(arg_name)+strlen(arg_value)+4;
+	}
+	va_end(list_params);
+
+	http_status_t status = http_request("POST", url, data, transferred, keep_http_header, device, params);
+	free(params);
+	return status;
+}
+
+static http_status_t http_request(const char *request_type, const char* url, void **data, size_t *transferred, bool keep_http_header, rndis_device_t *device, char *params) {
 	static uint32_t seq_number = 0x12345678; // first client segment's sequence number
 	bool uri;
 	const char *http_str = "http://";
@@ -143,68 +200,249 @@ usb_error_t HTTPGet(const char* url, void **data, rndis_device_t *device) {
 	init_tcp_session(device, ip, 0xec87, &seq_number, &server_sn);
 
 	/* Building HTTP request */
-	size_t length = 4 + !uri + 11 + 6 + strlen(url) + 4; // 4="GET ", 10=" HTTP/1.1\r\n", 6="Host: ", 4="\r\n\r\n"
-	char *request = malloc(length);
-	sprintf(request, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", uri ? url+websitelen : "/", websitename);
+	size_t length = strlen(request_type) + 1 + !uri + 11 + 6 + strlen(url) + 4 + strlen(params); // 10=" HTTP/1.1\r\n", 6="Host: ", 4="\r\n\r\n"
+	const size_t http_len = length;
+	char *request = malloc(length+1);
+	sprintf(request, "%s %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", request_type, uri ? url+websitelen : "/", websitename, params);
 	free(websitename);
 
 	/* Sending HTTP request */
 	tcp_encapsulate((uint8_t**)&request, &length, ip, 0xec87, HTTP_PORT, seq_number, server_sn, FLAG_TCP_ACK|FLAG_TCP_PSH);
-	seq_number += length;
+	seq_number += http_len;
 	ipv4_encapsulate((uint8_t**)&request, &length, IP_ADDR, ip, TCP_PROTOCOL);
 	ethernet_encapsulate((uint8_t**)&request, &length, device);
 	rndis_send_packet((uint8_t**)&request, &length, device);
 	free(request);
 
 	/* Receiving HTTP response */
-	reassemble_tcp_segments(data, ip, &seq_number, device);
-
+	usb_error_t error = reassemble_tcp_segments(data, ip, 0xec87, seq_number, &server_sn, device, transferred);
+	if(error != USB_SUCCESS)
+		return -1;
+	http_status_t status = (((char*)*data)[9]-'0')*100 + (((char*)*data)[10]-'0')*10 + (((char*)*data)[11]-'0');
+	
 	//close_tcp_session(ip, device);
-	return USB_SUCCESS;
+
+	if(keep_http_header)
+		return status;
+
+	size_t header_length = 0;
+	while(*((uint32_t*)(*data+header_length)) != 0x0a0d0a0d) header_length++;
+	header_length += 4;
+	memcpy(*data, *data+header_length, *transferred-header_length);
+	*data = realloc(*data, *transferred-header_length); /* Shrinking buffer */
+	*transferred -= header_length;
+
+	return status;
 }
 
 
-http_status_t reassemble_tcp_segments(void **data, uint32_t expected_ip, uint32_t *cur_sn, rndis_device_t *device) {
+usb_error_t reassemble_tcp_segments(void **data, uint32_t expected_ip, uint16_t src_port, uint32_t cur_sn, uint32_t *cur_ackn, rndis_device_t *device, size_t *transferred) {
+	// à terme, faire une fonction popqueuelist(ack_num);
+	/* cur_ackn : last acked server's sequence number */
 	tcp_segment_list_t *segment_list = NULL;
-	tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); // The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes)
 	size_t length;
 	usb_error_t code_err;
-	http_status_t ret_status;
+	usb_error_t ret_err = USB_SUCCESS;
+	const uint32_t beg_ackn = *cur_ackn;
 	size_t content_length = 0;
 	size_t content_received = 0;
+	uint16_t ackn_next_header_segment = 0; /* ACK number of the next header segment (See "Third process") */
+	bool chunked_mode = false;
+	size_t chunk_counter = 0xffffff;
 	do {
+		boot_NewLine();
+		tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); /* The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes */
+		if(!response) {
+			ret_err = USB_ERROR_NO_MEMORY;
+			break;
+		}
 		code_err = receive_tcp_segment(&response, &length, expected_ip, device);
-		const char *http_response = (char*)response + 4*(response->dataOffset_flags>>4&0x0f);
-		if(content_length == 0 && !memcmp(http_response, "HTTP/1.1 ", 9)) {
-			/* Waiting for the HTTP response (mandatory for what happens next) */
-			ret_status = (http_response[9]-0x30)*100 + (http_response[10]-0x30)*10 + (http_response[11]-0x30);
-			if(ret_status != HTTP_STATUS_OK)
-				break;
-			/* Searching for Content-Length field */
-			const char *ptr = http_response;
-			const char cont_len[] = "Content-Length:";
-			while(ptr-http_response<(int)length && memcmp(ptr, cont_len, 15)) {
-				while(ptr-http_response<(int)length && (*ptr != 0x0d || *(ptr+1) != 0x0a)) ptr++;
-				ptr += 2;
-			}
-			if(ptr-http_response>=(int)length)
-				return HTTP_STATUS_LENGTH_REQUIRED;
-			ptr += 16;
-			while(*ptr >= 0x30 && *ptr <= 0x39) {
-				content_length = content_length*10 + (*ptr-0x30);
-				ptr++;
-			}
-			// Parcourir jusqu'au 0d0a0d0a ? Au moins ajouter le segment à la liste chainée
+		if(code_err == USB_IGNORE) {
+			ret_err = code_err;
+			break;
 		}
 
-		// Du coup j'ai récup le content-length
-		// Ce qu'il faut faire mtn c'est récup chaque segment les uns après les autres et les ajouter à la liste au bon endroit
-		// Puis ACK quand c'est possible d'ack
-		// ATTENTION : la première partie du content est à la suite du HTTP header. Il faut donc le prendre en compte.
-		// Ne pas non plus oublier d'ack aussi le segment de la réponse HTTP.
+		const char *payload_response = (char*)response + 4*(response->dataOffset_flags>>4&0x0f);
 
-	} while((!content_length || (content_length && content_length!=content_received)) && code_err != USB_IGNORE);
-	return ret_status;
+		//if(response->dataOffset_flags&0x0x1000) /* If the ack flag is set */
+		//	popqueuelist(response->ack_number, expected_ip, port);
+		if((char*)response+length == payload_response) { /* If there's no payload */
+			free(response);
+			continue;
+		}
+
+		/* First process : chaining data */
+		tcp_segment_list_t *new_segment_list = malloc(sizeof(tcp_segment_list_t));
+		if(!new_segment_list) {
+			ret_err = USB_ERROR_NO_MEMORY;
+			break;
+		}
+
+		new_segment_list->relative_sn = getBigEndianValue((uint8_t*)&response->seq_number)-beg_ackn;
+		new_segment_list->pl_length = length - 4*(response->dataOffset_flags>>4&0x0f);
+		new_segment_list->segment = response;
+
+		if(!segment_list) {
+			new_segment_list->next = NULL;
+			segment_list = new_segment_list;
+			content_received += new_segment_list->pl_length;
+			os_PutStrFull(" ajout");
+		} else {
+			tcp_segment_list_t *cur_el = segment_list;
+			tcp_segment_list_t *prev_el = NULL;
+			while(cur_el && cur_el->relative_sn < new_segment_list->relative_sn) {
+				prev_el = cur_el;
+				cur_el = cur_el->next;
+			}
+			if(cur_el && cur_el->relative_sn == new_segment_list->relative_sn) {
+				os_PutStrFull(" dejarecu!");
+				size_t len = 0;
+				uint8_t *ack_msg = NULL;
+				tcp_encapsulate(&ack_msg, &len, expected_ip, src_port, HTTP_PORT, cur_sn, *cur_ackn, FLAG_TCP_ACK);
+				ipv4_encapsulate(&ack_msg, &len, IP_ADDR, expected_ip, TCP_PROTOCOL);
+				ethernet_encapsulate(&ack_msg, &len, device);
+				rndis_send_packet(&ack_msg, &len, device);
+				free(ack_msg);
+				continue;
+			} else {
+				new_segment_list->next = cur_el;
+				if(prev_el)
+					prev_el->next = new_segment_list;
+				else
+					segment_list = new_segment_list;
+				content_received += new_segment_list->pl_length;
+				os_PutStrFull(" ajout");
+			}
+		}
+
+		/* Second process : acking data */
+		if(segment_list->relative_sn != 0) /* If we haven't received the first segment yet... */
+			continue;
+
+		tcp_segment_list_t *cur_el = segment_list;
+		while(cur_el->next && cur_el->relative_sn+cur_el->pl_length == cur_el->next->relative_sn)
+			cur_el = cur_el->next;
+		if(*cur_ackn-beg_ackn != cur_el->relative_sn+cur_el->pl_length) {
+			*cur_ackn = beg_ackn + cur_el->relative_sn + cur_el->pl_length;
+
+			size_t len = 0;
+			uint8_t *ack_msg = NULL;
+			tcp_encapsulate(&ack_msg, &len, expected_ip, src_port, HTTP_PORT, cur_sn, *cur_ackn, FLAG_TCP_ACK);
+			ipv4_encapsulate(&ack_msg, &len, IP_ADDR, expected_ip, TCP_PROTOCOL);
+			ethernet_encapsulate(&ack_msg, &len, device);
+			rndis_send_packet(&ack_msg, &len, device);
+			free(ack_msg);
+
+			os_PutStrFull(" ack");
+		}
+
+		/* Third process : trying to find what the Content-Length value is */
+		if(ackn_next_header_segment == new_segment_list->relative_sn) {
+			tcp_segment_list_t *cur_seg_list = new_segment_list;
+			tcp_segment_t *seg_processing;
+			char *payload_processing;
+
+			third_process:
+
+			seg_processing = new_segment_list->segment;
+			payload_processing = (char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
+
+			//ret_status = (payload_processing[9]-0x30)*100 + (payload_processing[10]-0x30)*10 + (payload_processing[11]-0x30);
+			//if(ret_status != HTTP_STATUS_OK)
+			//	break;
+			/* Searching for the Content-Length field */
+			const char *ptr = payload_processing;
+			const char cont_len[] = "Content-Length:";
+			const char cont_enc[] = "Transfer-Encoding: chunked\r\n";
+			while(*((uint32_t*)ptr) != 0x0a0d0a0d && ptr-(char*)seg_processing<(int)length) {
+				ptr += 2;
+				if(!memcmp(ptr, cont_len, 15)) { /* If we found it, we update the content_length value */
+					ptr += 15;
+					while(*ptr == ' ') ptr++; /* Ignoring whitespaces */
+					while(*ptr >= 0x30 && *ptr <= 0x39) {
+						content_length = content_length*10 + (*ptr-0x30);
+						ptr++;
+					}
+				} else if(!memcmp(ptr, cont_enc, 28))
+					chunked_mode = true;
+				while(ptr-(char*)seg_processing<(int)length && (*ptr != 0x0d || *(ptr+1) != 0x0a)) ptr++;
+			}
+			/* If the payload is more large than we can handle, returning. */
+			if(content_length>65000) {
+				ret_err = USB_ERROR_NO_MEMORY;
+				break;
+			}
+			if(ptr-(char*)seg_processing>=(int)length) {
+				/* If we came at the end of the segment without reaching the end of the HTTP Header... */
+				ackn_next_header_segment += cur_seg_list->pl_length;
+				if(cur_seg_list->next && cur_seg_list->relative_sn+cur_seg_list->pl_length == cur_seg_list->next->relative_sn) {
+					cur_seg_list = cur_seg_list->next;
+					goto third_process;
+				} else
+					continue;
+			}
+			ptr += 4;
+			if(!chunked_mode)
+				content_length += ackn_next_header_segment + (ptr-payload_processing);
+			else /* Cheating a little bit (by considering that the header is a chunk) */
+				chunk_counter = (cur_seg_list->relative_sn - new_segment_list->relative_sn) + (ptr - payload_processing);
+		}
+
+		/* Fourth process : if the content is chunked... */
+		if(chunk_counter != 0xffffff && *cur_ackn-beg_ackn == new_segment_list->relative_sn+new_segment_list->pl_length) {
+			tcp_segment_list_t *cur_seg_list = new_segment_list;
+			tcp_segment_t *seg_processing;
+			char *payload_processing;
+
+			fourth_process:
+
+			seg_processing = new_segment_list->segment;
+			payload_processing = (char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
+
+			if(cur_seg_list->pl_length <= chunk_counter)
+				chunk_counter -= cur_seg_list->pl_length;
+			else {
+				const char *ptr = payload_processing+chunk_counter;
+				chunk_counter = getChunkSize(&ptr)+4;
+				if(chunk_counter == 4)
+					break;
+				chunk_counter -= cur_seg_list->pl_length - (ptr-payload_processing);
+			}
+			
+			if(cur_seg_list->next && cur_seg_list->relative_sn+cur_seg_list->pl_length == cur_seg_list->next->relative_sn) {
+				cur_seg_list = cur_seg_list->next;
+				goto fourth_process;
+			}
+		}
+	} while(!content_length || (content_length && content_length>content_received));
+
+	*data = malloc(1); /* to be reallocated... */
+	if(!*data)
+		ret_err = USB_ERROR_NO_MEMORY;
+	tcp_segment_list_t *cur_seg = segment_list;
+	tcp_segment_list_t *next_seg = NULL;
+	size_t cur_size = 0;
+	while(cur_seg) {
+		next_seg = cur_seg->next;
+		if(ret_err == USB_SUCCESS) {
+			void *tmp = realloc(*data, cur_size+cur_seg->pl_length);
+			if(!tmp) {
+				free(*data);
+				ret_err = USB_ERROR_NO_MEMORY;
+				cur_size = 0;
+			} else {
+				*data = tmp;
+				memcpy((char*)*data+cur_size, (char*)cur_seg->segment+4*(cur_seg->segment->dataOffset_flags>>4&0x0f), cur_seg->pl_length);
+				cur_size += cur_seg->pl_length;
+			}
+		}
+		free(cur_seg->segment);
+		free(cur_seg);
+		cur_seg = next_seg;
+	}
+
+	*transferred = cur_size;
+	return ret_err;
 }
 
 usb_error_t init_tcp_session(rndis_device_t *device, uint32_t ip_dst, uint16_t src_port, uint32_t *fsn, uint32_t *next_ack) {
@@ -465,7 +703,6 @@ usb_error_t dhcp_ip_request(rndis_device_t *device) {
 	}
 	return USB_SUCCESS;
 }
-
 
 usb_error_t send_dhcp_request(uint8_t *data, size_t length, rndis_device_t *device) {
 	uint8_t *old_data = data;
@@ -731,7 +968,6 @@ usb_error_t rndis_send_packet(uint8_t **data, size_t *length, rndis_device_t *de
 	return ret_err;
 }
 
-
 usb_error_t rndis_init(rndis_device_t *device) {
 	/**
 		Waits until a rndis device is detected
@@ -848,6 +1084,25 @@ usb_error_t rndis_init(rndis_device_t *device) {
 }
 
 
+size_t getChunkSize(const char **ascii) {
+	/**
+	 *	Considering this is a correct chunk size :
+	 *	-> 0x0a0d terminated
+	 *	-> which is only a combination of 0123456789abcdefABCDEF
+	 */
+	size_t size = 0;
+	while(**ascii != 0x0d) {
+		if(**ascii <= '9')
+			size = size*16 + (**ascii - '0');
+		else if(**ascii <= 'F')
+			size = size*16 + 10+(**ascii - 'A');
+		else
+			size = size*16 + 10+(**ascii - 'a');
+		(*ascii)++;
+	}
+	return size;
+}
+
 bool cmpbroadcast(const uint8_t *mac_addr) {
 	bool is_brdcst = true;
 	for(int i=0; i<6; i++)
@@ -855,11 +1110,9 @@ bool cmpbroadcast(const uint8_t *mac_addr) {
 	return is_brdcst;
 }
 
-
 uint32_t getBigEndianValue(uint8_t *beVal) {
 	return beVal[0]*16777216 + beVal[1]*65536 + beVal[2]*256 + beVal[3];
 }
-
 
 uint32_t getMyIPAddr() {
 	return IP_ADDR;
