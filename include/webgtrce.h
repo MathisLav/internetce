@@ -120,7 +120,7 @@ typedef struct dhcp_message {
 	/* Options /void options;/ */
 	// Must be 0xFF terminated
 } dhcp_message_t;
-typedef struct dns_query {
+typedef struct dns_message {
 	uint16_t id;
 	uint16_t flags;
 	uint16_t questions;
@@ -131,7 +131,7 @@ typedef struct dns_query {
 	// answers
 	// authority
 	// additional
-} dns_query_t;
+} dns_message_t;
 typedef struct tcp_segment {
 	uint16_t port_src;
 	uint16_t port_dst;
@@ -197,7 +197,7 @@ typedef enum http_status {
 #define ERROR_DHCP_NACK		01
 
 #define MAX_SEGMENT_SIZE	536		/* Minimum MSS (the calculator does not handle ipv4 fragments) */
-#define TCP_WINDOW_SIZE		MAX_SEGMENT_SIZE*3 /* Considering the calculator is pretty slow */
+#define TCP_WINDOW_SIZE		MAX_SEGMENT_SIZE*10 /* Considering the calculator is pretty slow */
 
 #define FLAG_TCP_NONE	0
 #define FLAG_TCP_FIN	1 << 0
