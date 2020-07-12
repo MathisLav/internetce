@@ -91,10 +91,14 @@ _os_DelVarArc:
 	ldir
 	call _ChkFindSym
 	pop ix
-	ret c
+	jr c,.err_not_found
 	call _DelVarArc
+	ld hl,1
 	ret
-
+.err_not_found:
+	or a
+	sbc hl,hl
+	ret
 
 	public _ResizeAppVar
 _ResizeAppVar:

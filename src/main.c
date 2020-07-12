@@ -23,8 +23,8 @@
 extern var_t *MoveToArc(const char* name);
 extern var_t *MoveToRam(const char* name);
 extern bool os_EnoughMem(size_t mem);
-extern void os_DelVarArc(uint8_t type, const char *name);
-extern int ResizeAppVar(const char* name, size_t new_size); /* true=the resizing happened, false it not */
+extern int os_DelVarArc(uint8_t type, const char *name);
+extern int ResizeAppVar(const char* name, size_t new_size); /* true=the resizing happened, false if not */
 #ifdef DEBUG
 static void debug(const void *addr, size_t len);
 static void disp(unsigned int val);
@@ -33,88 +33,98 @@ static void disp(unsigned int val);
 network_info_t netinfo;
 static uint8_t MAC_ADDR[6] = {0xEA, 0xA5, 0x59, 0x9C, 0xC1, 0};
 static uint32_t IP_ADDR = 0;
-/**
- *	Chained list of all temp vars created (to keep track of them).
- *	Appvars are basically created when the lib receives big amount of data from the internet.
- */
+static uint8_t *src_mac_addr; /* For dhcp purposes (we need to acknowledge the router's mac address) */
 static http_data_list_t *http_data_list = NULL;
+static msg_queue_t *send_queue = NULL;
+static port_list_t *listened_ports = NULL;
 
 
 
-/**************************************************************************\
- * à terme : - Renvoyer les packets aux bout d'un certain temps
- *			 - Mettre device en variable globale plutôt.
- *			 - Ajouter un checksum à UDP
- *			 - Augmenter les perfs ?
+/*******************************************************************************\
+ * à terme : - la découverte de l'adresse mac du routeur doit se faire par ARP.
+ *			 	(voir fetch_ethernet_frame et fetch_dhcp_msg)
+ *			 - Faire une version non-bloquante de send_http_request
+ *				-> dans ce cas, pourquoi pas faire un système de http-callback ?
+ *			 - close_connection
+ *			 - lease IP
+ *			 - Gérer ICMPv4 echo request
+ *			 - Gérer la fusion des packets ipv4 (= meilleures perfs)
  *			 - Y'a moyen d'utiliser les interruptions USB (intce.h)
- *				Ce serait vraiment lourd de même pas avoir besoin
- *				d'appeler une fonction "wait".
-\**************************************************************************/
+\*******************************************************************************/
 
 
 int main(void)
 {
-	usb_error_t ret_err;
-
 	os_ClrHome();
 	boot_NewLine();
-	os_PutStrFull("RNDIS Connection... ");
+	//os_PutStrFull("RNDIS Connection... ");
 	
 	web_Init();
 	while(!web_Connected() && !os_GetCSC())
-		usb_WaitForInterrupt();
+		web_WaitForEvents();
 	if(!web_Connected()) {
 		boot_NewLine();
 		os_PutStrFull("Canceled!");
 		while(!os_GetCSC()) {}
 		goto _end;
 	}
-	os_PutStrFull("Done!");
-	boot_NewLine();
+	//os_PutStrFull("Done!");
+	//boot_NewLine();
+
 
 	// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS - ARP - TCP - HTTP
-	// Protocoles auxiliaires : TLS->HTTPS - IRC - SSH
+	// Protocoles auxiliaires : ICMPv4 - TLS->HTTPS - IRC - SSH
 
-	// Du coup :
-	// Normalement tout fonctionne à peu près
-	// il faut encore :
-	//	- faire le truc de "globalité" (appeler reassemble en tant que callback)
-	//	- close_connection
-	//	- Faire des exemples d'applications de la lib (pour tester et donner envie entre autres)
-	//	- lease IP
-	//	- regarder "à termes" si y'a d'autres choses... 
+	
 
-
-	// OK donc tout ça est bien compliqué
-	// Le but maintenant c'est de rendre la connexion "transparente"
-	// c'est-à-dire non bloquante : on appelle web_Init, et web_Connected renvoie true quand c'est fait
-	// sauf que j'ai l'impression que usbHandler et les transferts USB ne font pas bon ménage ?
-	// y'a moyen qu'en effet ce soit pas vraiment fait pour
-	// dans ce cas je vais devoir ruser, comme par exemple détecter la co dans mon WaitForInterrupt maison
-	// Enfin bref, le but c'est d'abord de voir si c'est vaiment pas possible (notamment DinoRunCE je ne sais pas s'il en fait ?)
-	// Et si non, ruser avec mon waitforinterrupt maison
-	// UPDATE : DinoRunCE le fait donc c'est possible. Mais pourquoi moi je n'y arrive pas ?... -> s'inspirer
-
+	// !!! LETTRE A MOI-MÊME !!!
+	// OK donc si tu vois ce message c'est que y'a eu une grosse pause...
+	// Jusqu'à maintenant j'étais en train de faire le truc de "globalité" : à savoir le multi-threading et le système de ports.
+	// Donc j'ai VRAIMENT galéré, mais vraiment beaucoup. Et me voici aujourd'hui à cette avancée :
+	// Dans la théorie le code fonctionne : requestport, listenport mais surtout fetch_http_request, httpget etc.
+	// En pratique y'a pas mal de bugs qu'ils faut absolument résoudre pour qualifier la globalité de "terminée".
+	//	A savoir, y'a une liste de bugs plus bas, voilà les trucs que j'ai remarqué.
+	// Evidemment y'a surement tout plein d'autres bugs, donc une fois que j'aurai résolu ceux-là (bon courage) faudra en chercher d'autres.
+	// Càd qu'il va falloir faire des dizaines de tests sur des dizaines de sites différents pour voir que tout fonctionne (ou pas).
+	// Et encore une fois bon courage, rien que pour résoudre les bugs suivants ça risque de prendre un certain temps.
+	//
+	// Une fois que je n'aurais pas remarqué d'autres bugs, il faudra faire les deux petits "A termes" ci-dessous quie vraient être rapides.
+	// Et une fois que ce sera fait, il faudra voir les "A termes" en haut, séléctionner les plus pertinents et les mettre en oeuvre.
+	// 
+	// ATTENTION : un certain nombre de bugs ont été causé par des trucs qui ne dépendent pas de moi.
+	//		-> Pour pas faire deux fois la même erreur il est important de noter les deux remarques "MORALE" juste en-dessous.
 
 
-	os_PutStrFull("DHCP Request...     ");
-	ret_err = dhcp_ip_request();
-	//if(ret_err != USB_SUCCESS) -> ne fonctionne pas ?
-	//	goto _end;
-	os_PutStrFull("Done!");
-	boot_NewLine();
-	os_PutStrFull("HTTP Request...     ");
+
+	// MORALE : NE PAS UTILISER DE USB_HANDLEEVENTS/WAITFOREVENTS/WAITFORINTERRUPTS DANS UN CALLBACK !!!! (donc usb_transfer non plus)
+	// MORALE : NE PAS UTILISER OS_PUTSTRFULL À OUTRANCE (FAUT PAS QUE ÇA SCROLLE)
+
+
+	// BUGS :
+	//	- www.fcstream.cc se charge que jusqu'à 14000 environ : surement un problème avec les chunks
+	//		-> Cause : les chunks sont en effet mal configurés par le serveur qui a l'air d'envoyer la taille du chunk + le "chunk header" (taille du chunk+2*0d0a)
+	//			Il semblerait que ça n'arrive pas quand on travaille en gzip : l'admin du site n'a pas du vérifier que le site marchait sur des vieux navigateurs.
+	//		-> Solution : Traiter le gzip : c'est pas pour tout de suite donc pour le moment je laisse ça comme ça
+	//
+	//	- Avant, après un transfert au niveau de lock_data ça RC. Et du jour au lendemain plus (y'a juste eu un Garbage Collect entre)
+	//	- Des fois, le transfert (HTTP) s'arrête en plein milieu et la calc freeze (plus d'events/boucle infinie ?)
+	//	- Des fois, WLCE0000 n'est pas effacé
+
+
+
+	//os_PutStrFull("HTTP Request...     ");
 	http_data_t *data = NULL;
-	http_status_t status = HTTPGet("www.wikipedia.com", &data, false);
+	http_status_t status = HTTPGet("www.perdu.com", &data, false);
 	while(!os_GetCSC()) {}
 	os_ClrHome();
 	disp(status);
 	debug(data, 72);
-	//os_PutStrFull((const char*)data->data);
 	while(!os_GetCSC()) {}
-		os_ClrHome();
-	os_PutStrFull("Done!");
-	boot_NewLine();
+	//os_ClrHome();
+	//os_PutStrFull((const char*)data->data);
+	//while(!os_GetCSC()) {}
+	//os_PutStrFull("Done!");
+	//boot_NewLine();
 
 	// The End.
 	boot_NewLine();
@@ -127,12 +137,7 @@ int main(void)
 	return 0;
 }
 
-	//		est-ce que j'autorise une window size assez grande ou je fonctionne en segment->ack ?
-	//		je renvoie un paquet au bout de combien de temps ?
-	//		comment je gère une erreur (checksum ou ack_number etc) ?
 	//		est-ce que je gère la possibilité d'envoyer du multi-packet ?
-	//		est-ce que je fais aussi une vérification qu'il a bien renvoyé un bon ack (= notre seq_number) ?
-	//			faudra d'ailleurs pas oublier d'augmenter en conséquence notre sequence number juste ici...
 
 	// CDC Personnel pour TCP (à restreindre ou à élargir en fonction)
 	//  *	crucial
@@ -141,9 +146,9 @@ int main(void)
 	//
 	//		- ORGANISER une connexion
 	//	->		 * 	Gérer les SYN, SYN/ACK, ACK du début de connexion
-	//	_		(*)	Renvoyer un segment au bout d'un certain temps
+	//	->		(*)	Renvoyer un segment au bout d'un certain temps
 	//	_		(*)	Terminer une connexion (FIN, FIN/ACK *2)
-	//	_		~*~	Permettre la communication simultanée de plusieurs applications (utile seulement si la lib ne bloque pas l'application)
+	//	->		~*~	Permettre la communication simultanée de plusieurs applications (utile seulement si la lib ne bloque pas l'application)
 	//
 	//		- ASSURER la réception des segments
 	//	->		* Remettre les segments dans l'ordre, malgré leur arrivée asynchrone
@@ -160,9 +165,6 @@ http_status_t HTTPGet(const char* url, http_data_t **data, bool keep_http_header
 	/**
 	 *	WARNING : The content returned by those functions are in READ-ONLY
 	 */
-
-	// à terme, mettre le seq_num dans un structure genre "tcp_request" avec seq_num, ack_num, ip_dst, src_port...
-	// Différent pour chaque requête.
 	char null_pointer = 0x00;
 	return http_request("GET", url, data, keep_http_header, &null_pointer);
 }
@@ -202,7 +204,6 @@ http_status_t HTTPPost(const char* url, http_data_t **data, bool keep_http_heade
 static http_status_t http_request(const char *request_type, const char* url, http_data_t **data, bool keep_http_header, char *params) {
 	// usb_error_t on error
 	// http_status_t else
-	uint32_t seq_number = random(); /* first client segment's sequence number */
 	bool uri;
 	const char *http_str = "http://";
 	if(!memcmp(url, http_str, 7)) /* Ignoring http:// */
@@ -218,287 +219,352 @@ static http_status_t http_request(const char *request_type, const char* url, htt
 	char *websitename = malloc(websitelen+1);
 	memcpy(websitename, url, websitelen);
 	websitename[websitelen] = 0x00;
+
+	/* Configuring request information */
 	uint32_t ip = send_dns_request(websitename);
-	uint32_t server_sn;
-	init_tcp_session(ip, 0xec87, &seq_number, &server_sn);
+	http_exchange_t *exch = calloc(1, sizeof(http_exchange_t));
+	exch->ip_dst = ip;
+	if(exch->ip_dst == 0xffffffff)
+		return DNS_ERROR;
+	exch->port_src = web_RequestPort();
+	exch->port_dst = HTTP_PORT;
+	exch->cur_sn = random();
+	exch->beg_sn = exch->cur_sn;
+	exch->chunk_counter = 0xffffff;
+	exch->data = data;
+	exch->keep_http_header = keep_http_header;
+	exch->timeout = rtc_Time() + TIMEOUT;
+
+	/* Initiating connection */
+	web_ListenPort(exch->port_src, fetch_http_msg, exch);
+	const uint8_t options[] = {0x02, 0x04, MAX_SEGMENT_SIZE/256, MAX_SEGMENT_SIZE%256};
+	add_tcp_queue(NULL, 0, exch, FLAG_TCP_SYN, sizeof(options), options);
+	exch->cur_sn++;
+	while(!exch->connected)
+		web_WaitForEvents(); // Timeout ?
+	web_WaitForEvents();
+	os_PutStrFull("INITED ");
 
 	/* Building HTTP request */
 	size_t length = strlen(request_type) + 1 + !uri + 11 + 6 + strlen(url) + 4 + strlen(params); /* 10=" HTTP/1.1\r\n", 6="Host: ", 4="\r\n\r\n" */
-	const size_t http_len = length;
+	
 	char *request = malloc(length+1);
 	sprintf(request, "%s %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", request_type, uri ? url+websitelen : "/", websitename, params);
 	free(websitename);
 
 	/* Sending HTTP request */
-	tcp_encapsulate((uint8_t**)&request, &length, ip, 0xec87, HTTP_PORT, seq_number, server_sn, FLAG_TCP_ACK|FLAG_TCP_PSH);
-	seq_number += http_len;
-	ipv4_encapsulate((uint8_t**)&request, &length, IP_ADDR, ip, TCP_PROTOCOL);
-	ethernet_encapsulate((uint8_t**)&request, &length);
-	rndis_send_packet((uint8_t**)&request, &length);
+	add_tcp_queue(request, length, exch, FLAG_TCP_ACK|FLAG_TCP_PSH, 0, NULL);
 	free(request);
 
-	/* Receiving HTTP response */
-	http_status_t status = fetch_http_msg(data, ip, 0xec87, seq_number, &server_sn, keep_http_header);
-	
-	//close_tcp_session(ip);
-
-	return status;
-}
-
-
-http_status_t fetch_http_msg(http_data_t **data, uint32_t expected_ip, uint16_t src_port, uint32_t cur_sn, uint32_t *cur_ackn, bool keep_http_header) {
-	/**
-	 *	WARNING : The content returned by those functions are in READ-ONLY
-	 */
-
-	// à terme, faire une fonction popqueuelist(ack_num);
-	/* cur_ackn : last acked server's sequence number */
-	tcp_segment_list_t *segment_list = NULL;
-	size_t length;
-	usb_error_t code_err;
-	http_status_t ret_err = 0;
-	const uint32_t beg_ackn = *cur_ackn;
-	size_t content_length = 0;
-	size_t header_length = 0;
-	size_t content_received = 0;
-	uint16_t ackn_next_header_segment = 0; /* ACK number of the next header segment (See "Third process") */
-	bool chunked_mode = false;
-	size_t chunk_counter = 0xffffff;
-	do {
-		asm_HomeUp();
-		boot_NewLine();
-		disp(content_received);
-		tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); /* The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes */
-		if(!response) {
-			ret_err = SYSTEM_NOT_ENOUGH_MEM;
-			break;
-		}
-		code_err = receive_tcp_segment(&response, &length, expected_ip);
-		if(code_err == USB_IGNORE) {
-			ret_err = USER_IGNORE;
-			break;
-		}
-
-		const char *payload_response = (char*)response + 4*(response->dataOffset_flags>>4&0x0f);
-
-		//if(response->dataOffset_flags&0x0x1000) /* If the ack flag is set */
-		//	popqueuelist(response->ack_number, expected_ip, port);
-		if((char*)response+length == payload_response) { /* If there's no payload */
-			free(response);
-			continue;
-		}
-
-		/* First process : chaining data */
-		tcp_segment_list_t *new_segment_list = malloc(sizeof(tcp_segment_list_t));
-		if(!new_segment_list) {
-			ret_err = SYSTEM_NOT_ENOUGH_MEM;
-			break;
-		}
-
-		new_segment_list->relative_sn = getBigEndianValue((uint8_t*)&response->seq_number)-beg_ackn;
-		new_segment_list->pl_length = length - 4*(response->dataOffset_flags>>4&0x0f);
-		new_segment_list->segment = response;
-
-		if(!segment_list) {
-			new_segment_list->next = NULL;
-			segment_list = new_segment_list;
-			content_received += new_segment_list->pl_length;
-		} else {
-			tcp_segment_list_t *cur_el = segment_list;
-			tcp_segment_list_t *prev_el = NULL;
-			while(cur_el && cur_el->relative_sn < new_segment_list->relative_sn) {
-				prev_el = cur_el;
-				cur_el = cur_el->next;
-			}
-			if(cur_el && cur_el->relative_sn == new_segment_list->relative_sn) {
-				size_t len = 0;
-				uint8_t *ack_msg = NULL;
-				tcp_encapsulate(&ack_msg, &len, expected_ip, src_port, HTTP_PORT, cur_sn, *cur_ackn, FLAG_TCP_ACK);
-				ipv4_encapsulate(&ack_msg, &len, IP_ADDR, expected_ip, TCP_PROTOCOL);
-				ethernet_encapsulate(&ack_msg, &len);
-				rndis_send_packet(&ack_msg, &len);
-				free(ack_msg);
-				continue;
-			} else {
-				new_segment_list->next = cur_el;
-				if(prev_el)
-					prev_el->next = new_segment_list;
-				else
-					segment_list = new_segment_list;
-				content_received += new_segment_list->pl_length;
-			}
-		}
-
-		/* Second process : acking data */
-		if(segment_list->relative_sn != 0) /* If we haven't received the first segment yet... */
-			continue;
-
-		tcp_segment_list_t *cur_el = segment_list;
-		while(cur_el->next && cur_el->relative_sn+cur_el->pl_length == cur_el->next->relative_sn)
-			cur_el = cur_el->next;
-		if(*cur_ackn-beg_ackn != cur_el->relative_sn+cur_el->pl_length) {
-			*cur_ackn = beg_ackn + cur_el->relative_sn + cur_el->pl_length;
-
-			size_t len = 0;
-			uint8_t *ack_msg = NULL;
-			tcp_encapsulate(&ack_msg, &len, expected_ip, src_port, HTTP_PORT, cur_sn, *cur_ackn, FLAG_TCP_ACK);
-			ipv4_encapsulate(&ack_msg, &len, IP_ADDR, expected_ip, TCP_PROTOCOL);
-			ethernet_encapsulate(&ack_msg, &len);
-			rndis_send_packet(&ack_msg, &len);
-			free(ack_msg);
-		}
-
-		/* Third process : trying to find what the Content-Length value is */
-		if(ackn_next_header_segment == new_segment_list->relative_sn) {
-			tcp_segment_list_t *cur_seg_list = new_segment_list;
-			tcp_segment_t *seg_processing;
-			char *payload_processing;
-
-			third_process:
-
-			seg_processing = new_segment_list->segment;
-			payload_processing = (char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
-
-			/* Searching for the Content-Length or Transfer-Encoding fields */
-			const char *ptr = payload_processing;
-			const char cont_len[] = "Content-Length:";
-			const char cont_enc[] = "Transfer-Encoding: chunked\r\n";
-			while(*((uint32_t*)ptr) != 0x0a0d0a0d && ptr-(char*)seg_processing<(int)length) {
-				ptr += 2;
-				if(!memcmp(ptr, cont_len, 15)) { /* If we found it, we update the content_length value */
-					ptr += 15;
-					while(*ptr == ' ') ptr++; /* Ignoring whitespaces */
-					while(*ptr >= 0x30 && *ptr <= 0x39) {
-						content_length = content_length*10 + (*ptr-0x30);
-						ptr++;
-					}
-				} else if(!memcmp(ptr, cont_enc, 28))
-					chunked_mode = true;
-				while(ptr-(char*)seg_processing<(int)length && (*ptr != 0x0d || *(ptr+1) != 0x0a)) ptr++;
-			}
-			/* If the payload is more large than we can handle, returning. */
-			if(content_length>65000) {
-				ret_err = SYSTEM_NOT_ENOUGH_MEM;
-				break;
-			}
-			if(ptr-(char*)seg_processing>=(int)length) {
-				/* If we came at the end of the segment without reaching the end of the HTTP Header... */
-				ackn_next_header_segment += cur_seg_list->pl_length;
-				if(cur_seg_list->next && cur_seg_list->relative_sn+cur_seg_list->pl_length == cur_seg_list->next->relative_sn) {
-					cur_seg_list = cur_seg_list->next;
-					goto third_process;
-				} else
-					continue;
-			}
-			ptr += 4;
-			header_length = ackn_next_header_segment + (ptr-payload_processing);
-			if(!chunked_mode)
-				content_length += header_length;
-			else /* Cheating a little bit (by considering that the header is a chunk) */
-				chunk_counter = (cur_seg_list->relative_sn - new_segment_list->relative_sn) + (ptr - payload_processing);
-		}
-
-		/* Fourth process : if the content is chunked... */
-		if(chunk_counter != 0xffffff && *cur_ackn-beg_ackn == new_segment_list->relative_sn+new_segment_list->pl_length) {
-			tcp_segment_list_t *cur_seg_list = new_segment_list;
-			tcp_segment_t *seg_processing;
-			const char *payload_processing;
-
-			fourth_process:
-			seg_processing = new_segment_list->segment;
-			payload_processing = (const char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
-
-			if(cur_seg_list->pl_length <= chunk_counter)
-				chunk_counter -= cur_seg_list->pl_length;
-			else {
-				const char *ptr = payload_processing;
-
-				recursive_chunk:
-				ptr += chunk_counter;
-				chunk_counter = getChunkSize(&ptr)+4;
-
-				if(chunk_counter == 4)
-					break;
-
-				if(cur_seg_list->pl_length - (ptr-payload_processing) <= chunk_counter)
-					chunk_counter -= cur_seg_list->pl_length - (ptr-payload_processing);
-				else
-					goto recursive_chunk; /* There is another chunk in the same tcp segment */
-			}
-			
-			if(cur_seg_list->next && cur_seg_list->relative_sn+cur_seg_list->pl_length == cur_seg_list->next->relative_sn) {
-				cur_seg_list = cur_seg_list->next;
-				goto fourth_process;
-			}
-		}
-	} while(!content_length || (content_length && content_length>content_received));
-
-
-	/* We store the data in an appvar, in order to relieve the heap */
-	http_data_list_t *new_http_data_el = calloc(1, sizeof(http_data_list_t));
-	char varstorage_name[9] = "WLCE0000";
-	if(content_received > TI_MAX_SIZE)
-		ret_err = SYSTEM_NOT_ENOUGH_MEM;
-	else if(ret_err == 0) {
-		/* Trying to find a name that is not already in used */
-		uint16_t n=0;
-		while(n<9999 && os_ChkFindSym(TI_APPVAR_TYPE, varstorage_name, NULL, NULL)) {
-			n++;
-			varstorage_name[7] = (n%10)+'0';
-			varstorage_name[6] = (n/10)+'0';
-			varstorage_name[5] = (n/100)+'0';
-			varstorage_name[4] = (n/1000)+'0';
-		}
-		if(n>=9999) {
-			os_PutStrFull("wsh tabuse gros");
-			exit(-1);
-		}
-		*data = os_CreateAppVar(varstorage_name, content_received);
-		if(!*data) {
-			ret_err = SYSTEM_NOT_ENOUGH_MEM;
-			free(new_http_data_el);
+	/* Waiting for the end of the request */
+	while(!exch->status) {
+		web_WaitForEvents();
+		if(exch->timeout <= rtc_Time()) {
+			web_UnlistenPort(exch->port_src);
+			free(exch);
+			return SYSTEM_TIMEOUT;
 		}
 	}
 
-	tcp_segment_list_t *cur_seg = segment_list;
+	web_UnlistenPort(exch->port_src);
+	
+	//close_tcp_session(ip);
+	http_status_t status = exch->status;
+	free(exch);
+	return status;
+}
+
+void add_tcp_queue(char *data, size_t length, http_exchange_t *exchange, uint16_t flags, size_t opt_size, const uint8_t *options) {
+	/**	- Add segment to send_queue (call push_tcp_segment)
+	 *	- Add segment to http queue (http_exchange_t pushed_seg field)
+	 *	- Increase the sequence number
+	 */
+	msg_queue_t *queued = push_tcp_segment(data, length, exchange->ip_dst, exchange->port_src, exchange->port_dst, exchange->cur_sn, exchange->cur_ackn, flags, opt_size, options);
+	exchange->cur_sn += length;
+	pushed_seg_list_t *new_seg = malloc(sizeof(pushed_seg_list_t));
+	new_seg->relative_sn = (exchange->cur_sn) - exchange->beg_sn;
+	new_seg->seg = queued;
+	new_seg->next = exchange->pushed_seg;
+	exchange->pushed_seg = new_seg;
+}
+
+void fetch_ack(http_exchange_t *exchange, uint32_t ackn) {
+	/**
+	 *	Unofficial name: remove_tcp_segments_that_are_acked_by_ackn
+	 *	Note: The segments in pushed_seg list are in descending order.
+	 */
+	pushed_seg_list_t *cur_seg = exchange->pushed_seg;
+	pushed_seg_list_t *prev_seg = NULL;
+	while(cur_seg && cur_seg->relative_sn > ackn-exchange->beg_sn) {
+		prev_seg = cur_seg;
+		cur_seg = cur_seg->next;
+	}
+
+	if(!cur_seg)
+		return;
+
+	pushed_seg_list_t *next_seg = NULL;
+	if(prev_seg)
+		prev_seg->next = NULL;
+	else
+		exchange->pushed_seg = NULL;
+
+	while(cur_seg) {
+		next_seg = cur_seg->next;
+		pop_message(cur_seg->seg);
+		free(cur_seg);
+		cur_seg = next_seg;
+	}
+
+	exchange->relative_seqacked = ackn-exchange->beg_sn;
+}
+
+usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+	(void)port; /* Unused parameter */
+	if(protocol != TCP_PROTOCOL)
+		return USB_IGNORE;
+	const tcp_segment_t *tcp_seg = (tcp_segment_t*)msg;
+	http_exchange_t *exch = (http_exchange_t*)user_data;
+
+	exch->timeout = rtc_Time() + TIMEOUT;
+
+	/* If SYN */
+	if(tcp_seg->dataOffset_flags&0x0200) {
+		exch->beg_ackn = getBigEndianValue((uint8_t*)&tcp_seg->seq_number)+1;
+		exch->cur_ackn = exch->beg_ackn;
+		exch->connected = true;
+		send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+	}
+
+	/* If ACK */
+	const uint32_t ack_number = getBigEndianValue((uint8_t*)&tcp_seg->ack_number);
+	if(ack_number-exch->beg_sn > exch->relative_seqacked && tcp_seg->dataOffset_flags&0x1000)
+		fetch_ack(exch, ack_number);
+
+	/* MAIN LOOP */
+	asm_HomeUp();
+	boot_NewLine();
+	disp(exch->content_received);
+
+	const char *payload_response = (char*)msg + 4*(((tcp_segment_t*)msg)->dataOffset_flags>>4&0x0f);
+	if((char*)msg+length == payload_response) /* If there's no payload */
+		return USB_SUCCESS;
+
+	tcp_segment_t *response = malloc(length); /* The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes */
+	if(!response) {
+		wipe_data(exch);
+		exch->status = SYSTEM_NOT_ENOUGH_MEM;
+		return USB_ERROR_NO_MEMORY;
+	}
+	memcpy(response, msg, length);
+
+	/* First process : chaining data */
+	tcp_segment_list_t *new_segment_list = malloc(sizeof(tcp_segment_list_t));
+	if(!new_segment_list) {
+		wipe_data(exch);
+		exch->status = SYSTEM_NOT_ENOUGH_MEM;
+		return USB_ERROR_NO_MEMORY;
+	}
+
+	new_segment_list->relative_sn = getBigEndianValue((uint8_t*)&response->seq_number)-exch->beg_ackn;
+	new_segment_list->pl_length = length - 4*(response->dataOffset_flags>>4&0x0f);
+	new_segment_list->segment = response;
+
+	if(!exch->segment_list) {
+		new_segment_list->next = NULL;
+		exch->segment_list = new_segment_list;
+		exch->content_received += new_segment_list->pl_length;
+	} else {
+		tcp_segment_list_t *cur_el = exch->segment_list;
+		tcp_segment_list_t *prev_el = NULL;
+		while(cur_el && cur_el->relative_sn < new_segment_list->relative_sn) {
+			prev_el = cur_el;
+			cur_el = cur_el->next;
+		}
+		if(cur_el && cur_el->relative_sn == new_segment_list->relative_sn) { /* deja vue */
+			send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+			return USB_SUCCESS;
+		} else {
+			new_segment_list->next = cur_el;
+			if(prev_el)
+				prev_el->next = new_segment_list;
+			else
+				exch->segment_list = new_segment_list;
+			exch->content_received += new_segment_list->pl_length;
+		}
+	}
+
+	/* Second process : acking data */
+	if(exch->segment_list->relative_sn != 0) /* If we haven't received the first segment yet... */
+		return USB_SUCCESS;
+
+	tcp_segment_list_t *cur_el = exch->segment_list;
+	while(cur_el->next && cur_el->relative_sn+cur_el->pl_length == cur_el->next->relative_sn)
+		cur_el = cur_el->next;
+	if(exch->cur_ackn-exch->beg_ackn != cur_el->relative_sn+cur_el->pl_length) {
+		exch->cur_ackn = exch->beg_ackn + cur_el->relative_sn + cur_el->pl_length;
+		send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+	}
+
+	/* Third process : trying to find what the Content-Length value is */
+	if(!exch->header_length && exch->ackn_next_header_segment == new_segment_list->relative_sn) {
+		tcp_segment_list_t *cur_seg_list = new_segment_list;
+		tcp_segment_t *seg_processing;
+		char *payload_processing;
+
+		third_process:
+
+		seg_processing = new_segment_list->segment;
+		payload_processing = (char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
+
+		/* Searching for the Content-Length or Transfer-Encoding fields */
+		const char *ptr = payload_processing;
+		const char cont_len[] = "Content-Length:";
+		const char cont_enc[] = "Transfer-Encoding: chunked\r\n";
+		while(*((uint32_t*)ptr) != 0x0a0d0a0d && ptr-(char*)seg_processing<(int)length) {
+			ptr += 2;
+			if(!memcmp(ptr, cont_len, 15)) { /* If we found it, we update the content_length value */
+				ptr += 15;
+				while(*ptr == ' ') ptr++; /* Ignoring whitespaces */
+				while(*ptr >= 0x30 && *ptr <= 0x39) {
+					exch->content_length = exch->content_length*10 + (*ptr-0x30);
+					ptr++;
+				}
+			} else if(!memcmp(ptr, cont_enc, 28))
+				exch->data_chunked = true;
+			while(ptr-(char*)seg_processing<(int)length && (*ptr != 0x0d || *(ptr+1) != 0x0a)) ptr++;
+		}
+		/* If the payload is more large than we can handle, returning. */
+		if(exch->content_length>TI_MAX_SIZE) {
+			wipe_data(exch);
+			exch->status = SYSTEM_NOT_ENOUGH_MEM;
+			return USB_ERROR_NO_MEMORY;
+		}
+
+		if(ptr-(char*)seg_processing>=(int)length) {
+			/* If we came at the end of the segment without reaching the end of the HTTP Header... */
+			exch->ackn_next_header_segment += cur_seg_list->pl_length;
+			if(cur_seg_list->next && cur_seg_list->relative_sn+cur_seg_list->pl_length == cur_seg_list->next->relative_sn) {
+				cur_seg_list = cur_seg_list->next;
+				goto third_process;
+			} else
+				return USB_SUCCESS;
+		}
+		ptr += 4;
+		exch->header_length = exch->ackn_next_header_segment + (ptr-payload_processing);
+		if(!exch->data_chunked)
+			exch->content_length += exch->header_length;
+		else /* Cheating a little bit (by considering that the header is a chunk) */
+			exch->chunk_counter = (cur_seg_list->relative_sn - new_segment_list->relative_sn) + (ptr - payload_processing);
+	}
+
+	/* Fourth process : if the content is chunked... */
+	if(exch->chunk_counter != 0xffffff && exch->cur_ackn-exch->beg_ackn == new_segment_list->relative_sn+new_segment_list->pl_length) {
+		tcp_segment_list_t *cur_seg_list = new_segment_list;
+		tcp_segment_t *seg_processing;
+		const char *payload_processing;
+
+		fourth_process:
+		seg_processing = new_segment_list->segment;
+		payload_processing = (const char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
+
+		if(cur_seg_list->pl_length <= exch->chunk_counter)
+			exch->chunk_counter -= cur_seg_list->pl_length;
+		else {
+			const char *ptr = payload_processing;
+
+			recursive_chunk:
+			ptr += exch->chunk_counter;
+			exch->chunk_counter = getChunkSize(&ptr)+4;
+
+			if(exch->chunk_counter == 4)
+				goto end_http_message;
+
+			if(cur_seg_list->pl_length - (ptr-payload_processing) <= exch->chunk_counter)
+				exch->chunk_counter -= cur_seg_list->pl_length - (ptr-payload_processing);
+			else
+				goto recursive_chunk; /* There is another chunk in the same tcp segment */
+		}
+			
+		if(cur_seg_list->next && cur_seg_list->relative_sn+cur_seg_list->pl_length == cur_seg_list->next->relative_sn) {
+			cur_seg_list = cur_seg_list->next;
+			goto fourth_process;
+		}
+	}
+
+	// FIN MAIN LOOP
+	if(!exch->content_length || (exch->content_length && exch->content_length>exch->content_received))
+		return USB_SUCCESS;
+
+	end_http_message:
+	os_PutStrFull("EEEEEEND ");
+
+	/* We store the data in an appvar, in order to relieve the heap */
+	if(exch->content_received > TI_MAX_SIZE) {
+		wipe_data(exch);
+		exch->status = SYSTEM_NOT_ENOUGH_MEM;
+		return USB_ERROR_NO_MEMORY;
+	}
+	http_data_list_t *new_http_data_el = calloc(1, sizeof(http_data_list_t));
+	char varstorage_name[9] = "WLCE0000";
+	/* Trying to find a name that is not already in used */
+	uint16_t n=0;
+	while(n<9999 && os_ChkFindSym(TI_APPVAR_TYPE, varstorage_name, NULL, NULL)) {
+		n++;
+		varstorage_name[7] = (n%10)+'0';
+		varstorage_name[6] = (n/10)+'0';
+		varstorage_name[5] = (n/100)+'0';
+		varstorage_name[4] = (n/1000)+'0';
+	}
+	if(n>=9999) {
+		wipe_data(exch);
+		free(new_http_data_el);
+		exch->status = SYSTEM_NOT_ENOUGH_MEM;
+		return USB_ERROR_NO_MEMORY;
+	}
+	*exch->data = os_CreateAppVar(varstorage_name, exch->content_received);
+	if(!(*exch->data)) {
+		wipe_data(exch);
+		free(new_http_data_el);
+		exch->status = SYSTEM_NOT_ENOUGH_MEM;
+		return USB_ERROR_NO_MEMORY;
+	}
+
+	tcp_segment_list_t *cur_seg = exch->segment_list;
 	tcp_segment_list_t *next_seg = NULL;
 	size_t cur_size = 0;
 	while(cur_seg) {
 		next_seg = cur_seg->next;
-		if(ret_err == 0) {
-			memcpy((*data)->data+cur_size, (uint8_t*)cur_seg->segment+4*(cur_seg->segment->dataOffset_flags>>4&0x0f), cur_seg->pl_length);
-			cur_size += cur_seg->pl_length;
-		}
+		memcpy((*exch->data)->data+cur_size, (uint8_t*)cur_seg->segment+4*(cur_seg->segment->dataOffset_flags>>4&0x0f), cur_seg->pl_length);
+		cur_size += cur_seg->pl_length;
 		free(cur_seg->segment);
 		free(cur_seg);
 		cur_seg = next_seg;
 	}
-	if(ret_err != 0)
-		return ret_err;
 
 	/* HTTP status */
-	http_status_t status = (((char*)*data)[11]-'0')*100 + (((char*)*data)[12]-'0')*10 + (((char*)*data)[13]-'0');
+	exch->status = (((char*)*exch->data)[11]-'0')*100 + (((char*)*exch->data)[12]-'0')*10 + (((char*)*exch->data)[13]-'0');
 
-	/* Removing header (if keep_http_header==false) and removing chunks info (if chunked_mode==true) */
-	uint16_t new_size = (*data)->size;
-	if(chunked_mode) {
-		char *ptr = (char*)(*data)->data;
+	/* Removing header (if keep_http_header==false) and removing chunks info (if data_chunked==true) */
+	uint16_t new_size = (*exch->data)->size;
+	if(exch->data_chunked) {
+		char *ptr = (char*)(*exch->data)->data;
 		char *before_ptr = ptr;
-		uint16_t chunk_size = header_length;
+		uint16_t chunk_size = exch->header_length;
 		do {
 			ptr += chunk_size;
 			before_ptr += chunk_size;
 			chunk_size = getChunkSize((const char**)&ptr);
 			ptr += 2;
-			memcpy(before_ptr, ptr, (char*)(*data)->data+new_size-ptr);
+			memcpy(before_ptr, ptr, (char*)(*exch->data)->data+new_size-ptr);
 			new_size -= ptr-before_ptr;
 			ptr = before_ptr+2;
 
 		} while(chunk_size);
 	}
-	if(!keep_http_header) {
-		new_size -= header_length;
-		memcpy((*data)->data, (*data)->data+header_length, new_size);
+	if(!exch->keep_http_header) {
+		new_size -= exch->header_length;
+		memcpy((*exch->data)->data, (*exch->data)->data+exch->header_length, new_size);
 	}
 
 	ResizeAppVar(varstorage_name, new_size);
@@ -509,9 +575,21 @@ http_status_t fetch_http_msg(http_data_t **data, uint32_t expected_ip, uint16_t 
 		new_http_data_el->next = http_data_list;
 	http_data_list = new_http_data_el;
 
-	lock_data(data);
-	return status;
+	lock_data(exch->data);
+	return USB_SUCCESS;
 }
+
+static void wipe_data(http_exchange_t *exch) {
+	tcp_segment_list_t *cur_seg = exch->segment_list;
+	tcp_segment_list_t *next_seg = NULL;
+	while(cur_seg) {
+		next_seg = cur_seg->next;
+		free(cur_seg->segment);
+		free(cur_seg);
+		cur_seg = next_seg;
+	}
+}
+
 
 int unlock_data(http_data_t **http_data) {
 	// Il faudra avertir que c'est une opération dangereuse
@@ -559,12 +637,38 @@ int lock_data(http_data_t **http_data) {
 
 
 void web_Cleanup() {
+	/* Freeing listened_ports */
+	port_list_t *cur_port = listened_ports;
+	port_list_t *next_port = NULL;
+	while(cur_port) {
+		next_port = cur_port->next;
+		free(cur_port);
+		cur_port = next_port;
+	}
+
+	/* Freeing send_queue */
+	msg_queue_t *cur_queue = send_queue;
+	msg_queue_t *next_queue = NULL;
+	while(cur_queue) {
+		os_ClrHome();
+		debug(cur_queue->msg+40, 72);
+		while(!os_GetCSC()) {}
+
+		next_queue = cur_queue->next;
+		pop_message(cur_queue);
+		cur_queue = next_queue;
+	}
+
 	/* Freeing the appvars used for saving what the lib receives */
 	http_data_list_t *cur_data = http_data_list;
 	http_data_list_t *next_data = NULL;
 	while(cur_data) {
 		next_data = cur_data->next;
-		os_DelVarArc(TI_APPVAR_TYPE, cur_data->varname);
+		if(os_DelVarArc(TI_APPVAR_TYPE, cur_data->varname))
+			os_PutStrFull("DELETED ");
+		else
+			os_PutStrFull("NOTDELED ");
+		while(!os_GetCSC()) {}
 		free(cur_data);
 		cur_data = next_data;
 	}
@@ -572,94 +676,52 @@ void web_Cleanup() {
 	usb_Cleanup();
 }
 
-usb_error_t init_tcp_session(uint32_t ip_dst, uint16_t src_port, uint32_t *fsn, uint32_t *next_ack) {
-	/* Handshaking... */
-	/* SYN */
-	uint8_t *data = NULL;
-	size_t length = 0;
-	tcp_encapsulate(&data, &length, ip_dst, src_port, HTTP_PORT, (*fsn)++, 0, FLAG_TCP_SYN);
-	ipv4_encapsulate(&data, &length, IP_ADDR, ip_dst, TCP_PROTOCOL);
-	ethernet_encapsulate(&data, &length);
-	rndis_send_packet(&data, &length);
-	free(data);
-
-	/* SYN ACK */
-	tcp_segment_t *response = malloc(MAX_SEGMENT_SIZE+0x40); /* The MAX_SEGMENT_SIZE does not take into account the TCP header (which is at most 0x40 bytes) */
-	receive_tcp_segment(&response, &length, ip_dst);
-	if(!(response->dataOffset_flags&0x0200) || !(response->dataOffset_flags&0x1000))
-		return USB_ERROR_FAILED;
-
-	/* ACK */
-	length = 0;
-	data = NULL;
-	tcp_encapsulate(&data, &length, ip_dst, src_port, HTTP_PORT, *fsn, getBigEndianValue((uint8_t*)&response->seq_number)+1, FLAG_TCP_ACK);
-	ipv4_encapsulate(&data, &length, IP_ADDR, ip_dst, TCP_PROTOCOL);
-	ethernet_encapsulate(&data, &length);
-	rndis_send_packet(&data, &length);
-	free(data);
-	free(response);
-
-	if(next_ack)
-		*next_ack = getBigEndianValue((uint8_t*)&response->seq_number)+1;
-	return USB_SUCCESS;
-}
-
-usb_error_t receive_tcp_segment(tcp_segment_t **tcp_segment, size_t *length, uint32_t expected_ip) {
-	/**
-	 *	Checks the checksum.
-	 */
-	uint8_t resp[MAX_SEGMENT_SIZE+180];
-	size_t len;
-	while(!os_GetCSC()) {
-		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), resp, MAX_SEGMENT_SIZE+180, 1, &len);		
-		// Il manque l'info len qui est donnée dans le callback
-		//transferred = false;
-		//usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.netinfo, (netinfo.ep_cdc)|0x80), resp, MAX_SEGMENT_SIZE+180, transfer_callback, &transferred);
-		//do {
-		//	usb_WaitForInterrupt();
-		//	key = os_GetCSC();
-		//} while(!key && !transferred);
-		const eth_frame_t *ethernet_frame = (eth_frame_t*)(resp + sizeof(rndis_packet_msg_t));
-		if(!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6)) { /* if it's for us (broadcast messages aren't interesting here) */
-			if(ethernet_frame->Ethertype == ETH_IPV4) {
-				const ipv4_packet_t *ipv4_pckt = (ipv4_packet_t*)((uint8_t*)ethernet_frame+sizeof(eth_frame_t)-4); /* -4=-crc */
-				if(ipv4_pckt->IP_addr_src == expected_ip && ipv4_pckt->Protocol == TCP_PROTOCOL) {
-					const tcp_segment_t *tcp_seg = (tcp_segment_t*)((uint8_t*)ipv4_pckt + (ipv4_pckt->VerIHL&0x0F)*4);
-					uint16_t seg_len = len-sizeof(rndis_packet_msg_t)-sizeof(eth_frame_t)+4-(ipv4_pckt->VerIHL&0x0F)*4;
-					if(!tcp_checksum((uint8_t*)tcp_seg, seg_len, expected_ip, IP_ADDR) && tcp_seg->port_src/256 == HTTP_PORT%256 && tcp_seg->port_src%256 == HTTP_PORT/256) {
-						*length = seg_len;
-						memcpy(*tcp_segment, tcp_seg, *length);
-						return USB_SUCCESS;
-					}
-				}
-			}
-		}
-		if((!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(ethernet_frame->MAC_dst)) && ethernet_frame->Ethertype == ETH_ARP)
-			send_arp_reply(resp);
-	}
-	return USB_IGNORE;
-}
-
-
-void send_arp_reply(uint8_t *rndis_packet) {
-	eth_frame_t *ethernet_frame = (eth_frame_t*)(rndis_packet + sizeof(rndis_packet_msg_t));
+void fetch_arp_msg(eth_frame_t *ethernet_frame) {
 	arp_message_t *arp_msg = (arp_message_t*)((uint8_t*)ethernet_frame + sizeof(eth_frame_t) - 4);
 	if(ethernet_frame->Ethertype != ETH_ARP || arp_msg->HwType != 0x0100 || arp_msg->Operation != 0x0100 || arp_msg->ProtocolType != ETH_IPV4 || arp_msg->IP_dst != IP_ADDR)
 		return;
-	memcpy(ethernet_frame->MAC_dst, ethernet_frame->MAC_src, 6);
-	memcpy((uint8_t*)ethernet_frame->MAC_src, MAC_ADDR, 6);
-	memcpy((uint8_t*)arp_msg->MAC_dst, (uint8_t*)arp_msg->MAC_src, 10);
-	memcpy((uint8_t*)arp_msg->MAC_src, MAC_ADDR, 6);
-	arp_msg->IP_src = IP_ADDR;
-	arp_msg->Operation = 0x0200;
+	arp_message_t *resp = malloc(sizeof(arp_message_t));
+	memcpy((uint8_t*)resp->MAC_dst, (uint8_t*)arp_msg->MAC_src, 10);
+	memcpy((uint8_t*)resp->MAC_src, MAC_ADDR, 6);
+	resp->IP_src = IP_ADDR;
+	resp->Operation = 0x0200;
+	resp->HwType = 0x0100;
+	resp->ProtocolType = 0x0008;
+	resp->HwAddrLength = 0x06;
+	resp->ProtocolAddrLength = 0x04;
 
-	usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), rndis_packet, sizeof(rndis_packet_msg_t) + sizeof(eth_frame_t)-4 + sizeof(arp_message_t), NULL, NULL);
+	msg_queue_t *queued = push_ethernet_frame((uint8_t*)resp, sizeof(arp_message_t), ETH_ARP);
+	queued->waitingTime += 100; /* We don't want the segment to be sent as a "repeated segment" */
+	usb_ScheduleTransfer(queued->endpoint, queued->msg, queued->length, send_callback, queued);
+	free(resp);
 }
 
+void send_arp_query(uint32_t ip) {
+	eth_frame_t *frame = calloc(1, sizeof(eth_frame_t)-4 + sizeof(arp_message_t));
+	arp_message_t *arp_msg = (arp_message_t*)((uint8_t*)frame+sizeof(eth_frame_t)-4);
+	memset(frame->MAC_dst, 0xff, 6);
+	memcpy((uint8_t*)frame->MAC_src, MAC_ADDR, 6);
+	arp_msg->IP_dst = ip;
+	memcpy((uint8_t*)arp_msg->MAC_src, MAC_ADDR, 6);
+	arp_msg->IP_src = IP_ADDR;
+	arp_msg->Operation = 0x0100;
+	send_rndis_packet((uint8_t*)arp_msg, sizeof(eth_frame_t)-4 + sizeof(arp_message_t));
+	free(frame);
+}
 
 uint32_t send_dns_request(const char *addr) {
+	uint32_t res_ip = 0;
+	push_dns_request(addr, &res_ip);
+	while(!res_ip)
+		web_WaitForEvents();
+	return res_ip;
+}
+
+void push_dns_request(const char *addr, uint32_t *res_ip) {
+	/* Returns -1 or error */
 	size_t length = sizeof(dns_message_t)+strlen(addr)+2+4; /* 2=length byte at the begining of the string+0 terminated string */
 	uint8_t *query = calloc(length, 1);
+
 	query[2] = 0x01;
 	query[5] = 0x01;
 
@@ -682,69 +744,62 @@ uint32_t send_dns_request(const char *addr) {
 	*(cursor_qry+2) = 1; /* A (IPv4) */
 	*(cursor_qry+4) = 1; /* IN (internet) */
 
-	udp_encapsulate(&query, &length, 0xd52f, DNS_PORT);
-	ipv4_encapsulate(&query, &length, IP_ADDR, netinfo.DNS_IP_addr, UDP_PROTOCOL);
-	ethernet_encapsulate(&query, &length);
-	usb_error_t ret_err = rndis_send_packet(&query, &length);
+	web_port_t client_port = web_RequestPort();
+	dns_exchange_t *dns_exch = malloc(sizeof(dns_exchange_t));
+	dns_exch->res_ip = res_ip;
+	dns_exch->queued_request = push_udp_datagram(query, length, netinfo.DNS_IP_addr, client_port, DNS_PORT);
 	free(query);
-	if(ret_err)
-		return ret_err;
 
-	uint8_t answer[512];
-	bool transferred;
-	int key = 0;
-	while(!key) {
-		transferred = false;
-		usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), answer, 512, transfer_callback, &transferred);
-		do {
-			usb_WaitForInterrupt();
-			key = os_GetCSC();
-		} while(!key && !transferred);
+	web_ListenPort(client_port, fetch_dns_msg, dns_exch);
+}
 
-		const eth_frame_t *ethernet_frame = (eth_frame_t*)(answer + sizeof(rndis_packet_msg_t));
-		if(!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6)) { /* if it's for us (broadcast messages aren't interesting here) */
-			if(ethernet_frame->Ethertype == ETH_IPV4) {
-				const ipv4_packet_t *ipv4_pckt = (ipv4_packet_t*)((uint8_t*)ethernet_frame+sizeof(eth_frame_t)-4); /* -4=-crc */
-				if(ipv4_pckt->Protocol == UDP_PROTOCOL) {
-					const udp_packet_t *udp_pckt = (udp_packet_t*)((uint8_t*)ipv4_pckt + (ipv4_pckt->VerIHL&0x0F)*4);
-					if(udp_pckt->port_src/256 == DNS_PORT && udp_pckt->port_src%256 == 0x00) {
-						const dns_message_t *dns_msg = (dns_message_t*)((uint8_t*)udp_pckt + sizeof(udp_packet_t));
+usb_error_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+	(void)port; (void)length; /* Unused parameters */
+	if(protocol != UDP_PROTOCOL)
+		return USB_IGNORE;
+	dns_exchange_t *exch = (dns_exchange_t*)user_data;
+	pop_message(exch->queued_request);
 
-						if(!(dns_msg->flags&0x8000) || !(dns_msg->flags&0x0080) || (dns_msg->flags&0x0F00)) /* if -> it isn't a response OR the recursion wasn't available OR an error occurred */
-							return USB_ERROR_FAILED; // renvoyer
+	const udp_datagram_t *udp_dtgm = (udp_datagram_t*)msg;
+	if(udp_dtgm->port_src/256 == DNS_PORT && udp_dtgm->port_src%256 == 0x00) {
+		const dns_message_t *dns_msg = (dns_message_t*)((uint8_t*)udp_dtgm + sizeof(udp_datagram_t));
 
-						const uint8_t nb_answers = dns_msg->answerRRs>>8;
-						const uint8_t nb_queries = dns_msg->questions>>8;
-
-						const uint8_t *ptr = (uint8_t*)dns_msg + sizeof(dns_message_t);
-						for(int i=0; i<nb_queries; i++) {
-							while(*(ptr++)) {}
-							ptr += 4;
-						}
-
-						int i = 0;
-						while(i < nb_answers && (*((uint16_t*)(ptr+2)) != 0x0100 || *((uint16_t*)(ptr+4)) != 0x0100)) {
-							ptr += 11;
-							ptr += *ptr + 1;
-							i++;
-						}
-						if(i == nb_answers)
-							return USB_ERROR_FAILED; // avertir l'user ?
-
-						ptr += 12;
-						return *((uint32_t*)ptr); /* Warning : returning the little endian value */
-					}
-				}
-			}
+		if(!(dns_msg->flags&0x8000) || !(dns_msg->flags&0x0080) || (dns_msg->flags&0x0F00)) { /* if -> it isn't a response OR the recursion wasn't available OR an error occurred */
+			*exch->res_ip = 0xffffffff;
+			return USB_ERROR_FAILED;
 		}
-		if((!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(ethernet_frame->MAC_dst)) && ethernet_frame->Ethertype == ETH_ARP)
-			send_arp_reply(answer);
+		const uint8_t nb_answers = dns_msg->answerRRs>>8;
+		const uint8_t nb_queries = dns_msg->questions>>8;
+
+		const uint8_t *ptr = (uint8_t*)dns_msg + sizeof(dns_message_t);
+		for(int i=0; i<nb_queries; i++) {
+			while(*(ptr++)) {}
+			ptr += 4;
+		}
+
+		int i = 0;
+		while(i < nb_answers && (*((uint16_t*)(ptr+2)) != 0x0100 || *((uint16_t*)(ptr+4)) != 0x0100)) {
+			ptr += 11;
+			ptr += *ptr + 1;
+			i++;
+		}
+		if(i == nb_answers) {
+			*exch->res_ip = 0xffffffff;
+			return USB_ERROR_FAILED;
+		}
+
+		ptr += 12;
+		*exch->res_ip = *((uint32_t*)ptr); /* Warning : returning the little endian value */
+
+		return USB_SUCCESS;
 	}
+
 	return USB_IGNORE;
 }
 
-
-usb_error_t dhcp_ip_request() {
+static msg_queue_t *dhcp_last_queued_msg = NULL;
+static uint8_t phase = 0; /* 0=not initiated, 1=discover sent, 2=request sent, 3=done */
+void dhcp_init() {
 	/**
 	 *	Sends an IPv4 request to the local server.
 	 *	The RNDIS netinfo must have been initialized with rndis_init() first.
@@ -753,6 +808,11 @@ usb_error_t dhcp_ip_request() {
 	 */
 	/* DHCP DISCOVERY */
 	static uint32_t xid = 0x03F82639;
+	if(phase != 0) /* if an init() is already running */
+		return;
+	
+	web_ListenPort(0x44, fetch_dhcp_msg, NULL);
+
 	const uint8_t beg_header[] = {0x01, 0x01, 0x06, 0x00};
 	const uint8_t options_disc[] = {53, 1, 1, 0x37, 3, 1, 3, 6, 0xFF, 0};
 	const size_t length_disc = sizeof(dhcp_message_t)+sizeof(options_disc);
@@ -762,106 +822,87 @@ usb_error_t dhcp_ip_request() {
 	memcpy(data_disc+28, &MAC_ADDR, 6);
 	((uint32_t*)data_disc)[59] = 0x63538263;
 	memcpy(data_disc+240, &options_disc, sizeof(options_disc));
-	send_dhcp_request(data_disc, length_disc);
 
-	/* planning DHCP REQUEST data */
-	const uint8_t options_req[] = {53, 1, 3, 0x37, 3, 1, 3, 6, 54, 4, 0, 0, 0, 0, 50, 4, 0, 0, 0, 0, 0xFF};
-	const size_t length_req = sizeof(dhcp_message_t)+21; /*1=0xFF, 20=options */
-	uint8_t *data_req = calloc(length_req, 1);
-	memcpy(data_req, &beg_header, 4);
-	((uint32_t*)data_req)[1] = xid;
-	memcpy(data_req+28, &MAC_ADDR, 6);
-	((uint32_t*)data_req)[59] = 0x63538263;
-	memcpy(data_req+240, &options_req, 21);
-
-	
-	bool completed = false;
-	uint8_t dhcp_error = 0;
-	uint8_t response[512];
-	int key = 0;
-	bool transferred;
-	uint32_t time = ((rtc_Days*24+rtc_Hours)*60+rtc_Minutes)*60+rtc_Seconds;
-	while(!key && !completed && !dhcp_error) {
-		transferred = false;
-		usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), response, 512, transfer_callback, &transferred);
-		do {
-			uint32_t cur_time = ((rtc_Days*24+rtc_Hours)*60+rtc_Minutes)*60+rtc_Seconds;
-			if(cur_time - time >= 2) {
-				time = cur_time;
-				send_dhcp_request(data_disc, length_disc);
-			}
-			usb_WaitForInterrupt();
-			key = os_GetCSC();
-		} while(!key && !transferred);
-
-		const eth_frame_t *ethernet_frame = (eth_frame_t*)(response + sizeof(rndis_packet_msg_t));
-		if(!memcmp(ethernet_frame->MAC_dst, MAC_ADDR, 6)) { /* if it's for us (broadcast messages aren't interesting here) */
-			memcpy(netinfo.router_MAC_addr, ethernet_frame->MAC_src, 6);
-			if(ethernet_frame->Ethertype == ETH_IPV4) {
-				const ipv4_packet_t *ipv4_pckt = (ipv4_packet_t*)((uint8_t*)ethernet_frame+sizeof(eth_frame_t)-4); // -4=-crc
-				if(ipv4_pckt->Protocol == UDP_PROTOCOL) {
-					const udp_packet_t *udp_pckt = (udp_packet_t*)((uint8_t*)ipv4_pckt + (ipv4_pckt->VerIHL&0x0F)*4);
-					if(udp_pckt->port_dst == 0x4400) {
-						const dhcp_message_t *dhcp_msg = (dhcp_message_t*)((uint8_t*)udp_pckt+sizeof(udp_packet_t));
-						if(dhcp_msg->op == 0x02 && dhcp_msg->xid == xid) {
-							IP_ADDR = dhcp_msg->yiaddr;
-							netinfo.DHCP_IP_addr = dhcp_msg->siaddr;
-							const uint8_t *cur_opt = (uint8_t*)((uint8_t*)dhcp_msg+sizeof(dhcp_message_t));
-							while(*cur_opt != 0xFF) {
-								switch(*cur_opt) {
-									case 53: /* DHCP message type */
-										if(*(cur_opt+2) == 2) { /* DHCP Offer */
-											((uint32_t*)(data_req+2))[62] = netinfo.DHCP_IP_addr;
-											((uint32_t*)data_req)[64] = IP_ADDR;
-											delay(100); /* that's funny but.. the calculator is too fast for some dhcp servers */
-											send_dhcp_request(data_req, length_req);
-										} else if(*(cur_opt+2) == 5) /* ACK */
-											completed = true;
-										else if(*(cur_opt+2) == 6) /* NACK */
-											dhcp_error = ERROR_DHCP_NACK;
-										break;
-									case 6: /* DNS SERVER */
-										netinfo.DNS_IP_addr = *((uint32_t*)(cur_opt+2)); /* we only take the first entry */
-										break;
-									case 51: /* Lease time */
-										// nothing to do yet
-										break;
-									default:
-										break;
-								}
-								cur_opt += *(cur_opt+1)+2;
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	xid++;
+	dhcp_last_queued_msg = push_udp_datagram(data_disc, length_disc, 0xffffffff, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
 	free(data_disc);
-	free(data_req);
-	if(!completed) {
-		os_PutStrFull("An error occurred...");
-		return USB_ERROR_FAILED;
+	phase = 1;
+	xid++;
+}
+
+usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+	(void)port; (void)length; (void)user_data; /* Unused parameters */
+
+	if(protocol != UDP_PROTOCOL)
+		return USB_IGNORE;
+
+	const dhcp_message_t *dhcp_msg = (dhcp_message_t*)((uint8_t*)msg+sizeof(udp_datagram_t));
+
+	if(dhcp_msg->op == 0x02) {
+		netinfo.DHCP_IP_addr = dhcp_msg->siaddr;
+		const uint8_t *cur_opt = (uint8_t*)((uint8_t*)dhcp_msg+sizeof(dhcp_message_t));
+		while(*cur_opt != 0xFF) {
+			switch(*cur_opt) {
+				case 53: /* DHCP message type */
+					if(*(cur_opt+2) == 2 && phase == 1) { /* DHCP Offer */
+						pop_message(dhcp_last_queued_msg);
+						const uint8_t beg_header[] = {0x01, 0x01, 0x06, 0x00};
+						const uint8_t options_req[] = {53, 1, 3, 0x37, 3, 1, 3, 6, 54, 4, 0, 0, 0, 0, 50, 4, 0, 0, 0, 0, 0xFF};
+						const size_t length_req = sizeof(dhcp_message_t)+21; /*1=0xFF, 20=options */
+						uint8_t *data_req = calloc(length_req, 1);
+						memcpy(data_req, &beg_header, 4);
+						((uint32_t*)data_req)[1] = dhcp_msg->xid;
+						memcpy(data_req+28, &MAC_ADDR, 6);
+						((uint32_t*)data_req)[59] = 0x63538263;
+						memcpy(data_req+240, &options_req, 21);
+						((uint32_t*)(data_req+2))[62] = netinfo.DHCP_IP_addr;
+						((uint32_t*)data_req)[64] = dhcp_msg->yiaddr;
+						dhcp_last_queued_msg = push_udp_datagram(data_req, length_req, 0xffffffff, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
+						phase = 2;
+					} else if(*(cur_opt+2) == 5 && phase == 2) { /* ACK */
+						pop_message(dhcp_last_queued_msg);
+						dhcp_last_queued_msg = NULL;
+						IP_ADDR = dhcp_msg->yiaddr;
+						memcpy(netinfo.router_MAC_addr, src_mac_addr, 6);
+						phase = 3;
+					} else if(*(cur_opt+2) == 6) { /* NACK */
+						if(dhcp_last_queued_msg) {
+							pop_message(dhcp_last_queued_msg);
+							dhcp_last_queued_msg = NULL;
+						}
+						phase = 0;
+						dhcp_init();
+						return USB_ERROR_FAILED;
+					}
+					break;
+				case 6: /* DNS SERVER */
+					netinfo.DNS_IP_addr = *((uint32_t*)(cur_opt+2)); /* we only take the first entry */
+					break;
+				case 51: /* Lease time */
+					// nothing to do yet
+					break;
+				default:
+					break;
+			}
+			cur_opt += *(cur_opt+1)+2;
+		}
 	}
 	return USB_SUCCESS;
 }
 
-usb_error_t send_dhcp_request(uint8_t *data, size_t length) {
-	uint8_t *old_data = data;
-	data = calloc(length, 1); /* it needs to be allocated with malloc */
-	memcpy(data, old_data, length);
-	udp_encapsulate(&data, &length, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
-	ipv4_encapsulate(&data, &length, 0x00000000, 0xFFFFFFFF, UDP_PROTOCOL);
-	ethernet_encapsulate(&data, &length);
-	usb_error_t ret_err = rndis_send_packet(&data, &length);
 
-	free(data);
-	return ret_err;
+usb_error_t send_tcp_segment(char *data, size_t length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
+	msg_queue_t *queued = push_tcp_segment(data, length, ip_dst, port_src, port_dst, seq_number, ack_number, flags, opt_size, options);
+	queued->waitingTime += 100; /* We don't want the segment to be sent as a "repeated segment" */
+	return usb_ScheduleTransfer(queued->endpoint, queued->msg, queued->length, send_callback, queued);
 }
 
+static usb_error_t send_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data) {
+	(void)endpoint; (void)status; (void)transferred; /* Unused parameters */
+	pop_message((msg_queue_t*)data);
+	return USB_SUCCESS;
+}
 
-void tcp_encapsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags) {
+msg_queue_t *push_tcp_segment(char *data, size_t length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
 	/**
 	 *	Encapsulates data with a TCP header.
 	 *	The current version is not able to break down data into several ipv4 packets.
@@ -869,60 +910,47 @@ void tcp_encapsulate(uint8_t **data, size_t *length, uint32_t ip_dst, uint16_t p
 	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
 	 *	@param length Points to the size of *data.
 	 *	@param ip_dst The IP of the target server.
-	 *	@param port_dst The destination port. For example TCP_PORT (443) or HTTP (80).
+	 *	@param port_dst The destination port. For example HTTP (80).
 	 *	@param ack_number The 32-bits number that must be written in the ACK field.
 	 *	@param flags For example FLAG_TCP_ACK for acknowledging a segment.
+	 *	@param options The options, or NULL if there is no option. THE SIZE OF THE ARRAY MUST BE A MULTIPLE OF 4.
 	 *	@output data points to the data encapsulated. length points to the new length of *data.
 	 */
+	uint8_t *tcp_seg = calloc(length+sizeof(tcp_segment_t), 1);
+	tcp_seg[0] = port_src/256;
+	tcp_seg[1] = port_src%256;
+	tcp_seg[2] = port_dst/256;
+	tcp_seg[3] = port_dst%256;
+	tcp_seg[4] = seq_number/16777216;
+	tcp_seg[5] = seq_number/65536;
+	tcp_seg[6] = seq_number/256;
+	tcp_seg[7] = seq_number%256;
+	tcp_seg[8] = ack_number/16777216;
+	tcp_seg[9] = ack_number/65536;
+	tcp_seg[10] = ack_number/256;
+	tcp_seg[11] = ack_number%256;
+	tcp_seg[12] = ((sizeof(tcp_segment_t)+opt_size)*4)|(flags&0x0100);
+	tcp_seg[13] = flags&0x00FF;
+	tcp_seg[14] = TCP_WINDOW_SIZE/256;	/* window size */
+	tcp_seg[15] = TCP_WINDOW_SIZE%256;
 
-	//			Faire en sorte qu'on puisse mettre les options en paramètre plutôt
-	uint8_t *old_data = *data;
-	if(flags&FLAG_TCP_SYN)
-		*data = calloc(*length+sizeof(tcp_segment_t)+4, 1);
-	else
-		*data = calloc(*length+sizeof(tcp_segment_t), 1);
-	(*data)[0] = port_src/256;
-	(*data)[1] = port_src%256;
-	(*data)[2] = port_dst/256;
-	(*data)[3] = port_dst%256;
-	(*data)[4] = seq_number/16777216;
-	(*data)[5] = seq_number/65536;
-	(*data)[6] = seq_number/256;
-	(*data)[7] = seq_number%256;
-	(*data)[8] = ack_number/16777216;
-	(*data)[9] = ack_number/65536;
-	(*data)[10] = ack_number/256;
-	(*data)[11] = ack_number%256;
-	if(flags&FLAG_TCP_SYN)
-		(*data)[12] = 0x60|(flags&0x0100);
-	else
-		(*data)[12] = 0x50|(flags&0x0100);
-	(*data)[13] = flags&0x00FF;
-	(*data)[14] = TCP_WINDOW_SIZE/256;	/* window size */
-	(*data)[15] = TCP_WINDOW_SIZE%256;
-	
-	if(flags&FLAG_TCP_SYN) {
-		const uint8_t options[] = {0x02, 0x04, MAX_SEGMENT_SIZE/256, MAX_SEGMENT_SIZE%256};
-		memcpy(*data+sizeof(tcp_segment_t), options, sizeof(options));
-		if(*length)
-			memcpy(*data+sizeof(tcp_segment_t)+4, old_data, *length);
-	} else if(*length)
-		memcpy(*data+sizeof(tcp_segment_t), old_data, *length);
-	if(flags&FLAG_TCP_SYN)
-		*length += sizeof(tcp_segment_t)+4;
-	else
-		*length += sizeof(tcp_segment_t);
-	
-	uint16_t chksm = tcp_checksum(*data, *length, IP_ADDR, ip_dst);
-	(*data)[16] = chksm/256;
-	(*data)[17] = chksm%256;
-	if(old_data)
-		free(old_data);
+	if(options)
+		memcpy(tcp_seg+sizeof(tcp_segment_t), options, opt_size);
+	if(length)
+		memcpy(tcp_seg+sizeof(tcp_segment_t)+opt_size, data, length);
+
+	uint16_t chksm = transport_checksum(tcp_seg, length+sizeof(tcp_segment_t)+opt_size, IP_ADDR, ip_dst, TCP_PROTOCOL);
+	tcp_seg[16] = chksm/256;
+	tcp_seg[17] = chksm%256;
+
+	msg_queue_t *queued = push_ipv4_packet(tcp_seg, length+sizeof(tcp_segment_t)+opt_size, IP_ADDR, ip_dst, TCP_PROTOCOL);
+	free(tcp_seg);
+	return queued;
 }
 
-uint16_t tcp_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst) {
+uint16_t transport_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
 	uint16_t chksmmsb = length/256 + (ip_dst/65536&0xff) + (ip_dst&0xff) + (ip_src/65536&0xff) + (ip_src&0xff);
-	uint16_t chksmlsb = TCP_PROTOCOL + length%256 + (ip_dst/16777216&0xff) + (ip_dst/256&0xff) + (ip_src/16777216&0xff) + (ip_src/256&0xff);
+	uint16_t chksmlsb = protocol + length%256 + (ip_dst/16777216&0xff) + (ip_dst/256&0xff) + (ip_src/16777216&0xff) + (ip_src/256&0xff);
 	for(size_t i=0; i<length-1; i+=2) {
 		chksmmsb += data[i];
 		chksmlsb += data[i+1];
@@ -931,11 +959,11 @@ uint16_t tcp_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip
 		chksmmsb += data[length-1];
 	chksmmsb += chksmlsb>>8;
 	chksmlsb += chksmmsb>>8;
-	return (uint16_t)~((chksmmsb<<8)+(chksmlsb&0x00FF));
+	return ~((chksmmsb<<8)+(chksmlsb&0x00FF));
 }
 
 
-void udp_encapsulate(uint8_t **data, size_t *length, uint16_t port_src, uint16_t port_dst) {
+msg_queue_t *push_udp_datagram(uint8_t *data, size_t length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst) {
 	/**
 	 *	Encapsulates data with an UDP header.
 	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
@@ -943,47 +971,26 @@ void udp_encapsulate(uint8_t **data, size_t *length, uint16_t port_src, uint16_t
 	 *	@param port_dst The destination port. For example DHCP_PORT (68) or DNS_PORT (53).
 	 *	@output data points to the data encapsulated. length points to the new length of *data.
 	 */
-	uint8_t *old_data = *data;
-	*data = calloc(*length+sizeof(udp_packet_t), 1);
-	(*data)[0] = port_src/256;
-	(*data)[1] = port_src%256;
-	(*data)[2] = port_dst/256;
-	(*data)[3] = port_dst%256;
-	(*data)[4] = (*length+sizeof(udp_packet_t))/256;
-	(*data)[5] = (*length+sizeof(udp_packet_t))%256;
-	memcpy(*data+sizeof(udp_packet_t), old_data, *length);
-	free(old_data);
-	*length += sizeof(udp_packet_t);
+	uint8_t *datagram = calloc(length+sizeof(udp_datagram_t), 1);
+	datagram[0] = port_src/256;
+	datagram[1] = port_src%256;
+	datagram[2] = port_dst/256;
+	datagram[3] = port_dst%256;
+	datagram[4] = (length+sizeof(udp_datagram_t))/256;
+	datagram[5] = (length+sizeof(udp_datagram_t))%256;
+	memcpy(datagram+sizeof(udp_datagram_t), data, length);
+	uint16_t chksm = transport_checksum(datagram, length+sizeof(udp_datagram_t), IP_ADDR, ip_dst, UDP_PROTOCOL);
+	datagram[6] = chksm/256;
+	datagram[7] = chksm%256;
+	
+	msg_queue_t *queued = push_ipv4_packet(datagram, length+sizeof(udp_datagram_t), IP_ADDR, ip_dst, UDP_PROTOCOL);
+	free(datagram);
+
+	return queued;
 }
 
 
-void ipv6_encapsulate(uint8_t **data, size_t *length, ipv6_addr ip_src, ipv6_addr ip_dst) {
-	/**
-	 *	Encapsulates data with an IPv6 header.
-	 *	This header is only aim at providing a way to make ICMPv6 messages.
-	 *	Consequently Hop Limit is set to 1, NextHeader is set to 0 and an Hop-by-Hop option is put.
-	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
-	 *	@param length Points to the size of *data.
-	 *	@param ip_src Your IP or 0::0 if you have been attributed no IP yet (which will usually be the case).
-	 *	@param ip_dst The IP of the target server (for broadcast messages : ff02::16).
-	 *	@output data points to the data encapsulated. length points to the new length of *data.
-	 */
-	const uint8_t hopByHopOption[] = {0x3a, 0x00, 0x05, 0x02, 0x00, 0x00, 0x01, 0x00};
-	uint8_t *old_data = *data;
-	*data = calloc(*length+sizeof(ipv6_packet_t)+8, 1); /* 8=Hop-by-Hop option */
-	(*data)[0] = 0x06;
-	((uint16_t*)*data)[2] = *length+8; /* 8=Hop-by-Hop option */
-	(*data)[7] = 0x01; // Hop limit
-	memcpy(*data+8, ip_src, 16);
-	memcpy(*data+24, ip_dst, 16);
-	memcpy(*data+sizeof(ipv6_packet_t), hopByHopOption, sizeof(hopByHopOption));
-	memcpy(*data+sizeof(ipv6_packet_t)+8, old_data, *length);
-	free(old_data);
-	*length += sizeof(ipv6_packet_t)+8;
-}
-
-
-void ipv4_encapsulate(uint8_t **data, size_t *length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
+msg_queue_t *push_ipv4_packet(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
 	/**
 	 *	Encapsulates data with an IPv4 header.
 	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
@@ -994,26 +1001,28 @@ void ipv4_encapsulate(uint8_t **data, size_t *length, uint32_t ip_src, uint32_t 
 	 *	@output data points to the data encapsulated. length points to the new length of *data.
 	 */
 	static uint16_t nbpacket = 0;
-	const size_t size = *length+sizeof(ipv4_packet_t);
+	const size_t size = length+sizeof(ipv4_packet_t);
 	const ipv4_packet_t packet = {0x45, 0x10, 0, 0, 0x40, 0x80, 0, 0, 0, 0};
-	uint8_t *old_data = *data;
-	*data = malloc(size);
-	memcpy(*data, &packet, sizeof(ipv4_packet_t));
-	(*data)[2] = size/256;
-	(*data)[3] = size%256;
-	(*data)[4] = nbpacket/256;
-	(*data)[5] = nbpacket%256;
-	(*data)[9] = protocol;
-	((uint32_t*)*data)[3] = ip_src;
-	((uint32_t*)*data)[4] = ip_dst;
-	uint16_t chksm = ipv4_checksum((uint16_t*)*data, sizeof(ipv4_packet_t));
-	(*data)[10] = chksm%256;
-	(*data)[11] = chksm/256;
-	memcpy(*data+sizeof(ipv4_packet_t), old_data, *length);
-	free(old_data);
-	*length = size;
+	uint8_t *ipv4_pckt = malloc(size);
+	memcpy(ipv4_pckt, &packet, sizeof(ipv4_packet_t));
+	ipv4_pckt[2] = size/256;
+	ipv4_pckt[3] = size%256;
+	ipv4_pckt[4] = nbpacket/256;
+	ipv4_pckt[5] = nbpacket%256;
+	ipv4_pckt[9] = protocol;
+	((uint32_t*)ipv4_pckt)[3] = ip_src;
+	((uint32_t*)ipv4_pckt)[4] = ip_dst;
+	uint16_t chksm = ipv4_checksum((uint16_t*)ipv4_pckt, sizeof(ipv4_packet_t));
+	ipv4_pckt[10] = chksm%256;
+	ipv4_pckt[11] = chksm/256;
+	memcpy(ipv4_pckt+sizeof(ipv4_packet_t), data, length);
 	nbpacket++;
-}
+
+	msg_queue_t *queued = push_ethernet_frame(ipv4_pckt, size, ETH_IPV4);
+	free(ipv4_pckt);
+
+	return queued;
+ }
 
 uint16_t ipv4_checksum(uint16_t *header, size_t length) {
 	uint24_t sum = 0;
@@ -1023,36 +1032,39 @@ uint16_t ipv4_checksum(uint16_t *header, size_t length) {
 }
 
 
-void ethernet_encapsulate(uint8_t **data, size_t *length) {
+msg_queue_t *push_ethernet_frame(uint8_t *data, size_t length, uint16_t protocol) {
 	/**
 	 *	Encapsulates data with an ethernet header.
 	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
 	 *	@param length Points to the size of *data.
 	 *	@output data points to the data encapsulated. length points to the new length of *data.
 	 */
-	uint8_t *old_data = *data;
-	if(*length<46) /* An ethernet frame must be at least 64B */
-		*data = calloc(64, 1);
+	uint8_t *frame; 
+	if(length<46) /* An ethernet frame must be at least 64B */
+		frame = calloc(64, 1);
 	else
-		*data = malloc(sizeof(eth_frame_t)+*length);
-	memcpy(*data, netinfo.router_MAC_addr, 6);
-	memcpy(*data+6, MAC_ADDR, 6);
-	((uint16_t*)*data)[6] = ETH_IPV4; /* Ethertype : IPv4 */
-	memcpy(*data+sizeof(eth_frame_t)-4, old_data, *length);
-	if(*length<46)
-		*length = 64;
+		frame = malloc(sizeof(eth_frame_t)+length);
+	memcpy(frame, netinfo.router_MAC_addr, 6);
+	memcpy(frame+6, MAC_ADDR, 6);
+	((uint16_t*)frame)[6] = protocol;
+	memcpy(frame+sizeof(eth_frame_t)-4, data, length);
+	if(length<46)
+		length = 64;
 	else
-		*length += sizeof(eth_frame_t);
-	uint32_t crc = crc32b(*data, *length-4);
-	
-	memcpy(*data+*length-4, &crc, 4);
-	free(old_data);
+		length += sizeof(eth_frame_t);
+	uint32_t crc = crc32b(frame, length-4);
+	memcpy(frame+length-4, &crc, 4);
+
+	msg_queue_t *queued = push_rndis_packet(frame, length);
+	free(frame);
+
+	return queued;
 }
 
 #define CRC_POLY 0xEDB88320
 uint32_t crc32b(uint8_t *data, size_t length) {
 	/**
-	 *	Computes ethernet crc 32bits. The bytes must be written reversed in the frame.
+	 *	Computes ethernet crc32.
 	 *	Code found on stackoverflow.com (no licence was given to the code)
 	 */
 	// IL FAUT EN PARLER AVEC QUELQU'UN
@@ -1078,7 +1090,7 @@ uint32_t crc32b(uint8_t *data, size_t length) {
 }
 
 
-usb_error_t rndis_send_packet(uint8_t **data, size_t *length) {
+msg_queue_t *push_rndis_packet(uint8_t *data, size_t length) {
 	/**
 	 *	Sends a packet to the rndis device.
 	 *	Blocks until the transfer finishes.
@@ -1086,28 +1098,38 @@ usb_error_t rndis_send_packet(uint8_t **data, size_t *length) {
 	 *	@param length Points to the size of *data.
 	 *	@return USB_SUCCESS or an error.
 	 */
-	usb_error_t ret_err;
-	uint8_t *old_data = *data;
-	*data = malloc(sizeof(rndis_packet_msg_t)+*length);
-	memset(*data, 0, sizeof(rndis_packet_msg_t));
-	(*data)[0] = RNDIS_PACKET_MSG;
-	(*data)[4] = (sizeof(rndis_packet_msg_t)+*length)%256;
-	(*data)[5] = (sizeof(rndis_packet_msg_t)+*length)/256;
-	(*data)[8] = 36;
-	(*data)[12] = *length%256;
-	(*data)[13] = *length/256;
-	memcpy(*data+sizeof(rndis_packet_msg_t), old_data, *length);
-	*length += sizeof(rndis_packet_msg_t);
-	free(old_data);
+	uint8_t *pckt = malloc(sizeof(rndis_packet_msg_t)+length);
+	memset(pckt, 0, sizeof(rndis_packet_msg_t));
+	pckt[0] = RNDIS_PACKET_MSG;
+	pckt[4] = (sizeof(rndis_packet_msg_t)+length)%256;
+	pckt[5] = (sizeof(rndis_packet_msg_t)+length)/256;
+	pckt[8] = 36;
+	pckt[12] = length%256;
+	pckt[13] = length/256;
+	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
 
-	bool completed = false;
-	ret_err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), *data, *length, transfer_callback, &completed);
-	while(!os_GetCSC() && !completed)
-		usb_WaitForInterrupt();
-
-	return ret_err;
+	return push_message(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), packets_callback, NULL);
 }
 
+usb_error_t send_rndis_packet(uint8_t *data, size_t length) {
+	uint8_t *pckt = malloc(sizeof(rndis_packet_msg_t)+length);
+	memset(pckt, 0, sizeof(rndis_packet_msg_t));
+	pckt[0] = RNDIS_PACKET_MSG;
+	pckt[4] = (sizeof(rndis_packet_msg_t)+length)%256;
+	pckt[5] = (sizeof(rndis_packet_msg_t)+length)/256;
+	pckt[8] = 36;
+	pckt[12] = length%256;
+	pckt[13] = length/256;
+	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
+
+	return usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), pckt, length+sizeof(rndis_packet_msg_t), send_rndis_callback, pckt);
+}
+
+static usb_error_t send_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data) {
+	(void)endpoint; (void)status; (void)transferred; /* Unused parameters */
+	free(data);
+	return USB_SUCCESS;
+}
 
 
 void web_Init() {
@@ -1123,7 +1145,15 @@ void web_Init() {
 	netinfo.ep_cdc = 0;
 	netinfo.enabled = false;
 	netinfo.connected = false;
+	netinfo.configuring = true;
+	netinfo.device = NULL;
 	usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
+	while(!netinfo.device)
+		usb_WaitForEvents();
+
+	memset(&(netinfo.router_MAC_addr), 0xFF, 6);
+	srand(rtc_Time());
+	MAC_ADDR[5] = randInt(0, 0xFF);
 }
 
 
@@ -1162,9 +1192,160 @@ uint32_t getMyIPAddr() {
 }
 
 bool web_Connected() {
-	return netinfo.connected && netinfo.enabled && netinfo.ep_wc && netinfo.ep_cdc;
+	return netinfo.connected && netinfo.enabled && netinfo.ep_wc && netinfo.ep_cdc && IP_ADDR;
 }
 
+usb_error_t web_WaitForEvents() {
+	msg_queue_t *cur_msg = send_queue;
+	uint8_t msg[MAX_SEGMENT_SIZE+100];
+	uint8_t *fetched = msg;
+	const uint32_t beg_time = rtc_Time();
+	usb_error_t sched_err;
+	
+	if(!netinfo.connected)
+		return usb_HandleEvents();
+
+	sched_err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
+	if(sched_err != USB_SUCCESS)
+		return sched_err;
+
+	while(fetched) {
+		if(beg_time + TIMEOUT <= rtc_Time())
+			return USB_ERROR_TIMEOUT;
+		while(cur_msg) {
+			if(cur_msg->waitingTime <= rtc_Time()) {
+				os_PutStrFull(".");
+				cur_msg->waitingTime = rtc_Time() + SEND_EVERY;
+				usb_Transfer(cur_msg->endpoint, cur_msg->msg, cur_msg->length, 3, NULL);
+			}
+			cur_msg = cur_msg->next;
+		}
+		usb_HandleEvents();
+	}
+	return USB_SUCCESS;
+}
+
+web_port_t web_RequestPort() {
+	static web_port_t next_port = 0x9000;
+	if(next_port)
+		return next_port++;
+	else
+		return 0;
+}
+
+void web_ListenPort(web_port_t port, web_port_event_t *callback, web_callback_data_t *callback_data) {
+	port_list_t *new_port = malloc(sizeof(port_list_t));
+	new_port->port = port;
+	new_port->callback = callback;
+	new_port->callback_data = callback_data;
+	new_port->next = listened_ports;
+	listened_ports = new_port;
+}
+
+void web_UnlistenPort(web_port_t port) {
+	port_list_t *cur_port = listened_ports;
+	port_list_t *prev_port = NULL;
+	port_list_t *next_port = NULL;
+	while(cur_port) {
+		next_port = cur_port->next;
+		if(cur_port->port == port) {
+			if(prev_port)
+				prev_port->next = cur_port->next;
+			else
+				listened_ports = cur_port->next;
+			free(cur_port);
+		}
+		prev_port = cur_port;
+		cur_port = next_port;
+	}
+}
+
+static usb_error_t call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port) {
+	port_list_t *cur_listenedPort = listened_ports;
+	while(cur_listenedPort) {
+		if(port == cur_listenedPort->port) {
+			if(cur_listenedPort->callback(port, protocol, data, length, cur_listenedPort->callback_data) == USB_SUCCESS)
+				break;
+		}
+		cur_listenedPort = cur_listenedPort->next;
+	}
+	return USB_SUCCESS;
+}
+
+static usb_error_t fetch_tcp_segment(tcp_segment_t *seg, size_t length, uint32_t ip_src, uint32_t ip_dst) {
+	if(!transport_checksum((uint8_t*)seg, length, ip_src, ip_dst, TCP_PROTOCOL))
+		return call_callbacks(TCP_PROTOCOL, seg, length, seg->port_dst/256 + seg->port_dst*256);
+	else
+		return USB_ERROR_FAILED;
+}
+
+static usb_error_t fetch_udp_datagram(udp_datagram_t *datagram, size_t length, uint32_t ip_src, uint32_t ip_dst) {
+	if(!transport_checksum((uint8_t*)datagram, length, ip_src, ip_dst, UDP_PROTOCOL) || !datagram->checksum)
+		return call_callbacks(UDP_PROTOCOL, datagram, length, datagram->port_dst/256 + datagram->port_dst*256);
+	else
+		return USB_ERROR_FAILED;
+}
+
+
+msg_queue_t *push_message(uint8_t *msg, size_t length, usb_endpoint_t endpoint, usb_transfer_callback_t callback, usb_callback_data_t *user_data) {
+	msg_queue_t *new_msg = malloc(sizeof(msg_queue_t));
+	new_msg->length = length;
+	new_msg->msg = msg;
+	new_msg->waitingTime = rtc_Time();
+	new_msg->endpoint = endpoint;
+	new_msg->callback = callback;
+	new_msg->user_data = user_data;
+	new_msg->prev = NULL;
+	new_msg->next = send_queue;
+	if(send_queue)
+		send_queue->prev = new_msg;
+	send_queue = new_msg;
+	//os_PutStrFull("Push ");
+	return new_msg;
+}
+
+void pop_message(msg_queue_t *msg) {
+	if(msg->prev)
+		msg->prev->next = msg->next;
+	else
+		send_queue = msg->next;
+	if(msg->next)
+		msg->next->prev = NULL;
+	free(msg->msg);
+	free(msg);
+	//os_PutStrFull("Pop ");
+}
+
+
+
+static usb_error_t fetch_IPv4_packet(ipv4_packet_t *pckt, size_t length) {
+	if(pckt->Protocol == TCP_PROTOCOL) {
+		tcp_segment_t *tcp_seg = (tcp_segment_t*)((uint8_t*)pckt + (pckt->VerIHL&0x0F)*4);
+		return fetch_tcp_segment(tcp_seg, length-(pckt->VerIHL&0x0F)*4, pckt->IP_addr_src, pckt->IP_addr_dst);
+	} else if(pckt->Protocol == UDP_PROTOCOL) {
+		udp_datagram_t *udp_dtgm = (udp_datagram_t*)((uint8_t*)pckt + (pckt->VerIHL&0x0F)*4);
+		return fetch_udp_datagram(udp_dtgm, length-(pckt->VerIHL&0x0F)*4, pckt->IP_addr_src, pckt->IP_addr_dst);
+	} else
+		return USB_IGNORE;
+}
+
+static usb_error_t fetch_ethernet_frame(eth_frame_t *frame, size_t length) {
+	if(frame->Ethertype == ETH_IPV4 && !memcmp(frame->MAC_dst, MAC_ADDR, 6)) {
+		src_mac_addr = frame->MAC_src;
+		ipv4_packet_t *ipv4_pckt = (ipv4_packet_t*)((uint8_t*)frame+sizeof(eth_frame_t)-4); /* -4=-crc */
+		return fetch_IPv4_packet(ipv4_pckt, length-sizeof(eth_frame_t)+4); /* No CRC */
+	} else if((!memcmp(frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(frame->MAC_dst)) && frame->Ethertype == ETH_ARP)
+		fetch_arp_msg(frame);
+	return USB_IGNORE;
+}
+
+
+static usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data) {
+	(void)endpoint; (void)status; /* Unused parameters */
+	usb_error_t ret_err = fetch_ethernet_frame((eth_frame_t*)(*((uint8_t**)data) + sizeof(rndis_packet_msg_t)), transferred-sizeof(rndis_packet_msg_t));
+	*((uint8_t**)data) = NULL; /* Notifying web_WaitForEvents() that we received and fetched something */
+	return ret_err;
+}
 
 static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t *data) {
 	(void)data; /* Unused parameter */
@@ -1178,16 +1359,15 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 		os_PutStrFull(tmp);
 		os_SetCursorPos(x, y);
 	#endif // DEBUG
-	if(event == USB_DEVICE_CONNECTED_EVENT)
+	if(netinfo.configuring && event == USB_DEVICE_CONNECTED_EVENT)
 	{
 		const rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
-		const rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 1, 0x0001010e, 4, 20, 0, 0x2d};
+		const rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
 		const usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
 		const usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 0x0400};
-		uint8_t desc[512];
+		uint8_t buffer[512];
 		size_t len = 0;
 		uint8_t cur_interface = 0; /* b0 -> wc, b1 -> cdc */
-		bool completed;
 		uint8_t i;
 
 		if(!netinfo.connected)
@@ -1199,77 +1379,63 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 			usb_WaitForEvents();
 
 		/*********** Configuration USB ***********/
-		usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, desc, 512, &len);
+		usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 512, &len);
 		if(!len)
 			return USB_ERROR_FAILED;
 		i = 0;
 		while(i<len) {
-			if(*(desc+i+1)==USB_INTERFACE_DESCRIPTOR) {
-				if(*(desc+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(desc+i+6)==RNDIS_SUBCLASS && *(desc+i+7)==RNDIS_PROTOCOL) {
+			if(*(buffer+i+1)==USB_INTERFACE_DESCRIPTOR) {
+				if(*(buffer+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(buffer+i+6)==RNDIS_SUBCLASS && *(buffer+i+7)==RNDIS_PROTOCOL) {
 					cur_interface = 1; /* wireless controller */
-					netinfo.int_wc = *(desc+i+2);
-				} else if(*(desc+i+5)==USB_CDC_DATA_CLASS && *(desc+i+6)==0x00 && *(desc+i+7)==0x00) {
+					netinfo.int_wc = *(buffer+i+2);
+				} else if(*(buffer+i+5)==USB_CDC_DATA_CLASS && *(buffer+i+6)==0x00 && *(buffer+i+7)==0x00) {
 					cur_interface = 2; /* cdc interface */
-					netinfo.int_cdc = *(desc+i+2);
+					netinfo.int_cdc = *(buffer+i+2);
 				} else
 					cur_interface = 0;
-			} else if(*(desc+i+1)==USB_ENDPOINT_DESCRIPTOR) {
+			} else if(*(buffer+i+1)==USB_ENDPOINT_DESCRIPTOR) {
 				if(cur_interface == 1)
-					netinfo.ep_wc = *(desc+i+2) & 0x7F;
+					netinfo.ep_wc = *(buffer+i+2) & 0x7F;
 				else if(cur_interface == 2)
-					netinfo.ep_cdc = *(desc+i+2) & 0x7F;
+					netinfo.ep_cdc = *(buffer+i+2) & 0x7F;
 			}
-			i += *(desc+i);
+			i += *(buffer+i);
 		}
 		if(!netinfo.ep_wc || !netinfo.ep_cdc) {
 			netinfo.connected = false;
 			return USB_IGNORE;
 		}
-		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)desc, len) != USB_SUCCESS)
+		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
 			return USB_ERROR_FAILED;
 
-
+		netinfo.configuring = false; /* Preventing from calling the callback twice */
 		/************** Configuration RNDIS ************/
 		/* Init Out */
-		completed = false;
-		memcpy(desc, &out_ctrl, sizeof(usb_control_setup_t));
-		desc[6] = 24; /* wLength */
-		memcpy(desc+sizeof(usb_control_setup_t), &rndis_initmsg, sizeof(rndis_init_msg_t));
-		usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, 0), desc, 0, transfer_callback, &completed);
-		while(!os_GetCSC() && !completed)
-			usb_WaitForInterrupt();
-		if(!completed)
-			return USB_IGNORE;
-		/* Init In */
-		completed = false;
-		memcpy(desc, &in_ctrl, sizeof(usb_control_setup_t));
-		usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, 0), desc, 0, transfer_callback, &completed);
-		while(!os_GetCSC() && !completed)
-			usb_WaitForInterrupt();
-		if(!completed)
-			return USB_IGNORE;
-		/* set OID_GEN_CURRENT_PACKET_FILTER with default value */
-		completed = false;
-		memcpy(desc, &out_ctrl, sizeof(usb_control_setup_t));
-		desc[6] = 32; /* wLength */
-		memcpy(desc+sizeof(usb_control_setup_t), &rndis_setpcktflt, sizeof(rndis_setpcktflt));
-		usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, 0), desc, 0, transfer_callback, &completed);
-		while(!os_GetCSC() && !completed)
-			usb_WaitForInterrupt();
-		if(!completed)
-			return USB_IGNORE;
-		memcpy(desc, &in_ctrl, sizeof(usb_control_setup_t));
-		completed = false;
-		usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, 0), desc, 0, transfer_callback, &completed);
-		while(!os_GetCSC() && !completed)
-			usb_WaitForInterrupt();
-		if(!completed)
-			return USB_IGNORE;
+		memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
+		buffer[6] = 24; /* wLength */
+		memcpy(buffer+sizeof(usb_control_setup_t), &rndis_initmsg, sizeof(rndis_init_msg_t));
+		do {
+			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+		} while(len == 0);
 
+		memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
+		do {
+			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+		} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_INIT_CMPLT);
 
-		memset(&(netinfo.router_MAC_addr), 0xFF, 6);
-		srand(rtc_Time());
-		MAC_ADDR[5] = randInt(0, 0xFF);
+		memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
+		buffer[6] = 32; /* wLength */
+		memcpy(buffer+sizeof(usb_control_setup_t), &rndis_setpcktflt, sizeof(rndis_setpcktflt));
+		do {
+			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+		} while(len == 0);
+
+		memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
+		do {
+			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+		} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_SET_CMPLT);
+		
+		dhcp_init();
 	}
 	else if(event == USB_DEVICE_ENABLED_EVENT) {
 		netinfo.enabled = true;
@@ -1282,12 +1448,6 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 	return USB_SUCCESS;
 }
 
-static usb_error_t transfer_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *completed) {
-	(void)endpoint; /* Unused parameter */
-	if(!status && transferred)
-		*((bool*)completed) = true;
-	return USB_SUCCESS;
-}
 
 #ifdef DEBUG
 static void debug(const void *addr, size_t len) {
