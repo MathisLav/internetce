@@ -31,7 +31,7 @@ static void disp(unsigned int val);
 #endif // DEBUG
 
 network_info_t netinfo;
-static uint8_t MAC_ADDR[6] = {0xEA, 0xA5, 0x59, 0x9C, 0xC1, 0};
+static uint8_t MAC_ADDR[6] = {0xEA, 0xA5, 0x59, 0x9C, 0xC1, 0x1E};
 static uint32_t IP_ADDR = 0;
 static uint8_t *src_mac_addr; /* For dhcp purposes (we need to acknowledge the router's mac address) */
 static http_data_list_t *http_data_list = NULL;
@@ -41,15 +41,14 @@ static port_list_t *listened_ports = NULL;
 
 
 /*******************************************************************************\
- * à terme : - la découverte de l'adresse mac du routeur doit se faire par ARP.
- *			 	(voir fetch_ethernet_frame et fetch_dhcp_msg)
- *			 - Faire une version non-bloquante de send_http_request
+ * à terme : - Faire une version non-bloquante de send_http_request
  *				-> dans ce cas, pourquoi pas faire un système de http-callback ?
- *			 - close_connection
- *			 - lease IP
  *			 - Gérer ICMPv4 echo request
+ *
+ * Pour la version 2.0 :
+ *			 - Gérer TLS et donc HTTPS
  *			 - Gérer la fusion des packets ipv4 (= meilleures perfs)
- *			 - Y'a moyen d'utiliser les interruptions USB (intce.h)
+ *			 - Si y'a moyen d'utiliser les interruptions USB (intce.h)...
 \*******************************************************************************/
 
 
@@ -114,7 +113,7 @@ int main(void)
 
 	//os_PutStrFull("HTTP Request...     ");
 	http_data_t *data = NULL;
-	http_status_t status = HTTPGet("www.perdu.com", &data, false);
+	http_status_t status = HTTPGet("www.google.com", &data, false);
 	while(!os_GetCSC()) {}
 	os_ClrHome();
 	disp(status);
@@ -147,7 +146,7 @@ int main(void)
 	//		- ORGANISER une connexion
 	//	->		 * 	Gérer les SYN, SYN/ACK, ACK du début de connexion
 	//	->		(*)	Renvoyer un segment au bout d'un certain temps
-	//	_		(*)	Terminer une connexion (FIN, FIN/ACK *2)
+	//	->		(*)	Terminer une connexion (FIN, FIN/ACK *2)
 	//	->		~*~	Permettre la communication simultanée de plusieurs applications (utile seulement si la lib ne bloque pas l'application)
 	//
 	//		- ASSURER la réception des segments
@@ -261,16 +260,16 @@ static http_status_t http_request(const char *request_type, const char* url, htt
 		web_WaitForEvents();
 		if(exch->timeout <= rtc_Time()) {
 			web_UnlistenPort(exch->port_src);
+			wipe_data(exch);
 			free(exch);
 			return SYSTEM_TIMEOUT;
 		}
 	}
-
-	web_UnlistenPort(exch->port_src);
-	
-	//close_tcp_session(ip);
 	http_status_t status = exch->status;
-	free(exch);
+
+	add_tcp_queue(NULL, 0, exch, FLAG_TCP_FIN|FLAG_TCP_ACK, 0, NULL);
+	exch->fin_sent = true;
+	web_WaitForEvents();
 	return status;
 }
 
@@ -338,8 +337,30 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 
 	/* If ACK */
 	const uint32_t ack_number = getBigEndianValue((uint8_t*)&tcp_seg->ack_number);
-	if(ack_number-exch->beg_sn > exch->relative_seqacked && tcp_seg->dataOffset_flags&0x1000)
+	if(ack_number-exch->beg_sn > exch->relative_seqacked && tcp_seg->dataOffset_flags&0x1000) {
 		fetch_ack(exch, ack_number);
+		if(!exch->connected && exch->fin_sent) {
+			os_PutStrFull("3 ");
+			web_UnlistenPort(exch->port_src);
+			free(exch);
+		}
+	}
+
+	/* If FIN */
+	if(tcp_seg->dataOffset_flags&0x0100) {
+		exch->connected = false;
+		if(exch->fin_sent) {
+			os_PutStrFull("1 ");
+			send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+			web_UnlistenPort(exch->port_src);
+			free(exch);
+		} else {
+			os_PutStrFull("2 ");
+			add_tcp_queue(NULL, 0, exch, FLAG_TCP_FIN|FLAG_TCP_ACK, 0, NULL);
+			exch->fin_sent = true;
+		}
+		return USB_SUCCESS;
+	}
 
 	/* MAIN LOOP */
 	asm_HomeUp();
@@ -413,6 +434,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		char *payload_processing;
 
 		third_process:
+		os_PutStrFull("c ");
 
 		seg_processing = new_segment_list->segment;
 		payload_processing = (char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
@@ -465,6 +487,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		const char *payload_processing;
 
 		fourth_process:
+		os_PutStrFull("d ");
 		seg_processing = new_segment_list->segment;
 		payload_processing = (const char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
 
@@ -474,6 +497,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 			const char *ptr = payload_processing;
 
 			recursive_chunk:
+			os_PutStrFull("r ");
 			ptr += exch->chunk_counter;
 			exch->chunk_counter = getChunkSize(&ptr)+4;
 
@@ -810,7 +834,7 @@ void dhcp_init() {
 	static uint32_t xid = 0x03F82639;
 	if(phase != 0) /* if an init() is already running */
 		return;
-	
+
 	web_ListenPort(0x44, fetch_dhcp_msg, NULL);
 
 	const uint8_t beg_header[] = {0x01, 0x01, 0x06, 0x00};
@@ -877,8 +901,8 @@ usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 				case 6: /* DNS SERVER */
 					netinfo.DNS_IP_addr = *((uint32_t*)(cur_opt+2)); /* we only take the first entry */
 					break;
-				case 51: /* Lease time */
-					// nothing to do yet
+				case 58: /* T1 Lease time */
+					//t1_leasetime = rtc_Time() + getBigEndianValue(cur_opt+2);
 					break;
 				default:
 					break;

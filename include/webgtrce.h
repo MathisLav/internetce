@@ -240,6 +240,7 @@ typedef struct http_exchange {
 	web_port_t port_src;
 	web_port_t port_dst;
 	bool connected;							/* Three-way handshake completed */
+	bool fin_sent;
 	uint32_t timeout;
 	uint32_t cur_sn;						/* Current client's sequence number (SN of the next-sent segment) */
 	uint32_t cur_ackn;						/* Current server's sequence number (our ack number) */
