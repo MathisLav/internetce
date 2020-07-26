@@ -54,6 +54,7 @@ dkms.conf
 # folders
 bin/*
 obj/*
+old/*
 
 # dependancies
 clibs.8xg

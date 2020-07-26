@@ -3,8 +3,6 @@
 # ----------------------------
 
 NAME         ?= INTERNET
-#ICON         ?= icon.png
-#DESCRIPTION  ?= "Browse the internet like a boss 8)"
 MAIN_ARGS    ?= NO
 COMPRESSED   ?= NO
 ARCHIVED     ?= NO

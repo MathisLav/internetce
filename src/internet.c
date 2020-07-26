@@ -1,14 +1,11 @@
-/**
- *--------------------------------------
- * Lib Name: webgtrce
- * Author: Mathis Lavigne aka Epharius
- * License:
- * Description: This librairy aim at allowing any program to access the internet.
- *--------------------------------------
- */
+//#define DEBUG
 
-#define DEBUG
+#ifndef DEBUG
+#define debug(...)
+#define disp(...)
+#endif
 
+#include "../include/internetstatic.h"
 #include <tice.h>
 #include <keypadc.h>
 #include <stdio.h>
@@ -18,18 +15,17 @@
 #include <usbdrvce.h>
 #include <fileioc.h>
 #include <stdarg.h>
-#include "../include/webgtrce.h"
 
-extern var_t *MoveToArc(const char* name);
-extern var_t *MoveToRam(const char* name);
-extern bool os_EnoughMem(size_t mem);
-extern int os_DelVarArc(uint8_t type, const char *name);
-extern int ResizeAppVar(const char* name, size_t new_size); /* true=the resizing happened, false if not */
+
 #ifdef DEBUG
-static void debug(const void *addr, size_t len);
-static void disp(unsigned int val);
+void debug(const void *addr, size_t len);
+void disp(unsigned int val);
 #endif // DEBUG
 
+
+/**
+ * Global variables
+ */
 network_info_t netinfo;
 static uint8_t MAC_ADDR[6] = {0xEA, 0xA5, 0x59, 0x9C, 0xC1, 0x1E};
 static uint32_t IP_ADDR = 0;
@@ -41,138 +37,37 @@ static port_list_t *listened_ports = NULL;
 
 
 /*******************************************************************************\
- * à terme : - Faire une version non-bloquante de send_http_request
- *				-> dans ce cas, pourquoi pas faire un système de http-callback ?
- *			 - Gérer ICMPv4 echo request
- *
  * Pour la version 2.0 :
+ *			 - Faire une version non-bloquante de send_http_request
+ *				-> dans ce cas, pourquoi pas faire un système de http-callback ?
  *			 - Gérer TLS et donc HTTPS
  *			 - Gérer la fusion des packets ipv4 (= meilleures perfs)
  *			 - Si y'a moyen d'utiliser les interruptions USB (intce.h)...
 \*******************************************************************************/
 
 
-int main(void)
-{
-	os_ClrHome();
-	boot_NewLine();
-	//os_PutStrFull("RNDIS Connection... ");
-	
-	web_Init();
-	while(!web_Connected() && !os_GetCSC())
-		web_WaitForEvents();
-	if(!web_Connected()) {
-		boot_NewLine();
-		os_PutStrFull("Canceled!");
-		while(!os_GetCSC()) {}
-		goto _end;
-	}
-	//os_PutStrFull("Done!");
-	//boot_NewLine();
-
-
-	// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS - ARP - TCP - HTTP
-	// Protocoles auxiliaires : ICMPv4 - TLS->HTTPS - IRC - SSH
-
-	
-
-	// !!! LETTRE A MOI-MÊME !!!
-	// OK donc si tu vois ce message c'est que y'a eu une grosse pause...
-	// Jusqu'à maintenant j'étais en train de faire le truc de "globalité" : à savoir le multi-threading et le système de ports.
-	// Donc j'ai VRAIMENT galéré, mais vraiment beaucoup. Et me voici aujourd'hui à cette avancée :
-	// Dans la théorie le code fonctionne : requestport, listenport mais surtout fetch_http_request, httpget etc.
-	// En pratique y'a pas mal de bugs qu'ils faut absolument résoudre pour qualifier la globalité de "terminée".
-	//	A savoir, y'a une liste de bugs plus bas, voilà les trucs que j'ai remarqué.
-	// Evidemment y'a surement tout plein d'autres bugs, donc une fois que j'aurai résolu ceux-là (bon courage) faudra en chercher d'autres.
-	// Càd qu'il va falloir faire des dizaines de tests sur des dizaines de sites différents pour voir que tout fonctionne (ou pas).
-	// Et encore une fois bon courage, rien que pour résoudre les bugs suivants ça risque de prendre un certain temps.
-	//
-	// Une fois que je n'aurais pas remarqué d'autres bugs, il faudra faire les deux petits "A termes" ci-dessous quie vraient être rapides.
-	// Et une fois que ce sera fait, il faudra voir les "A termes" en haut, séléctionner les plus pertinents et les mettre en oeuvre.
-	// 
-	// ATTENTION : un certain nombre de bugs ont été causé par des trucs qui ne dépendent pas de moi.
-	//		-> Pour pas faire deux fois la même erreur il est important de noter les deux remarques "MORALE" juste en-dessous.
+// Fait :		USB - RNDIS - Ethernet - IPv4 - UDP - DHCP - DNS - ARP - TCP - HTTP - ICMPv4
+// Protocoles auxiliaires : TLS->HTTPS - IRC - SSH
+// MORALE : NE PAS UTILISER DE USB_HANDLEEVENTS/WAITFOREVENTS/WAITFORINTERRUPTS DANS UN CALLBACK !!!! (donc usb_transfer non plus)
+// MORALE : NE PAS UTILISER OS_PUTSTRFULL À OUTRANCE (FAUT PAS QUE ÇA SCROLLE)
+// BUGS :
+//	- www.fcstream.cc se charge que jusqu'à 14000 environ : surement un problème avec les chunks
+//		-> Cause : les chunks sont en effet mal configurés par le serveur qui a l'air d'envoyer la taille du chunk + le "chunk header" (taille du chunk+2*0d0a)
+//			Il semblerait que ça n'arrive pas quand on travaille en gzip : l'admin du site n'a pas du vérifier que le site marchait sur des vieux navigateurs.
+//		-> Solution : Traiter le gzip : c'est pas pour tout de suite donc pour le moment je laisse ça comme ça
+//
+//	- Avant, après un transfert au niveau de web_LockData ça RC. Et du jour au lendemain plus (y'a juste eu un Garbage Collect entre)
+//	- Des fois, le transfert (HTTP) s'arrête en plein milieu et la calc freeze (plus d'events/boucle infinie ?)
+//	- Des fois, WLCE0000 n'est pas effacé
 
 
 
-	// MORALE : NE PAS UTILISER DE USB_HANDLEEVENTS/WAITFOREVENTS/WAITFORINTERRUPTS DANS UN CALLBACK !!!! (donc usb_transfer non plus)
-	// MORALE : NE PAS UTILISER OS_PUTSTRFULL À OUTRANCE (FAUT PAS QUE ÇA SCROLLE)
-
-
-	// BUGS :
-	//	- www.fcstream.cc se charge que jusqu'à 14000 environ : surement un problème avec les chunks
-	//		-> Cause : les chunks sont en effet mal configurés par le serveur qui a l'air d'envoyer la taille du chunk + le "chunk header" (taille du chunk+2*0d0a)
-	//			Il semblerait que ça n'arrive pas quand on travaille en gzip : l'admin du site n'a pas du vérifier que le site marchait sur des vieux navigateurs.
-	//		-> Solution : Traiter le gzip : c'est pas pour tout de suite donc pour le moment je laisse ça comme ça
-	//
-	//	- Avant, après un transfert au niveau de lock_data ça RC. Et du jour au lendemain plus (y'a juste eu un Garbage Collect entre)
-	//	- Des fois, le transfert (HTTP) s'arrête en plein milieu et la calc freeze (plus d'events/boucle infinie ?)
-	//	- Des fois, WLCE0000 n'est pas effacé
-
-
-
-	//os_PutStrFull("HTTP Request...     ");
-	http_data_t *data = NULL;
-	http_status_t status = HTTPGet("www.google.com", &data, false);
-	while(!os_GetCSC()) {}
-	os_ClrHome();
-	disp(status);
-	debug(data, 72);
-	while(!os_GetCSC()) {}
-	//os_ClrHome();
-	//os_PutStrFull((const char*)data->data);
-	//while(!os_GetCSC()) {}
-	//os_PutStrFull("Done!");
-	//boot_NewLine();
-
-	// The End.
-	boot_NewLine();
-	os_PutStrFull("Waiting for keypress...");
-	_end:
-	while(!os_GetCSC())
-		usb_WaitForInterrupt();
-
-	web_Cleanup();
-	return 0;
-}
-
-	//		est-ce que je gère la possibilité d'envoyer du multi-packet ?
-
-	// CDC Personnel pour TCP (à restreindre ou à élargir en fonction)
-	//  *	crucial
-	// (*)	important
-	// ~*~	facultatif
-	//
-	//		- ORGANISER une connexion
-	//	->		 * 	Gérer les SYN, SYN/ACK, ACK du début de connexion
-	//	->		(*)	Renvoyer un segment au bout d'un certain temps
-	//	->		(*)	Terminer une connexion (FIN, FIN/ACK *2)
-	//	->		~*~	Permettre la communication simultanée de plusieurs applications (utile seulement si la lib ne bloque pas l'application)
-	//
-	//		- ASSURER la réception des segments
-	//	->		* Remettre les segments dans l'ordre, malgré leur arrivée asynchrone
-	//	->		* Avoir un assez gros buffer pour recevoir un segment de taille maximale
-	//	->		* ACK le serveur en bonne et due forme
-	//
-	//		- VERIFIER la conformité de la réponse
-	//	->		*	Vérifier le checksum
-	//	->		*	Prévenir le serveur (ne pas ACK) en cas de segment erronné
-	//
-
-
-http_status_t HTTPGet(const char* url, http_data_t **data, bool keep_http_header) {
-	/**
-	 *	WARNING : The content returned by those functions are in READ-ONLY
-	 */
+http_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_header) {
 	char null_pointer = 0x00;
 	return http_request("GET", url, data, keep_http_header, &null_pointer);
 }
 
-http_status_t HTTPPost(const char* url, http_data_t **data, bool keep_http_header, int nb_params, ...) {
-	/**
-	 *	WARNING : The content returned by those functions are in READ-ONLY
-	 */
-
+http_status_t web_HTTPPost(const char* url, http_data_t **data, bool keep_http_header, int nb_params, ...) {
 	if(nb_params == 0) {
 		char null_pointer = 0x00;
 		return http_request("POST", url, data, keep_http_header, &null_pointer);
@@ -190,19 +85,26 @@ http_status_t HTTPPost(const char* url, http_data_t **data, bool keep_http_heade
 			return -1;
 		}
 		params = tmp;
-		sprintf(params+param_len, "%s: %s\r\n", arg_name, arg_value);
-		param_len += strlen(arg_name)+strlen(arg_value)+4;
+		if(i) {
+			sprintf(params+param_len, "&%s=%s", arg_name, arg_value);
+			param_len += strlen(arg_name)+strlen(arg_value)+2;
+		} else {
+			sprintf(params+param_len, "%s=%s", arg_name, arg_value);
+			param_len += strlen(arg_name)+strlen(arg_value)+1;
+		}
 	}
 	va_end(list_params);
 
-	http_status_t status = http_request("POST", url, data, keep_http_header, params);
+	char *add_req = malloc(param_len+16+12+49);
+	sprintf(add_req, "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n%s", param_len, params);
+
+	http_status_t status = http_request("POST", url, data, keep_http_header, add_req);
 	free(params);
+	free(add_req);
 	return status;
 }
 
 static http_status_t http_request(const char *request_type, const char* url, http_data_t **data, bool keep_http_header, char *params) {
-	// usb_error_t on error
-	// http_status_t else
 	bool uri;
 	const char *http_str = "http://";
 	if(!memcmp(url, http_str, 7)) /* Ignoring http:// */
@@ -220,7 +122,7 @@ static http_status_t http_request(const char *request_type, const char* url, htt
 	websitename[websitelen] = 0x00;
 
 	/* Configuring request information */
-	uint32_t ip = send_dns_request(websitename);
+	uint32_t ip = web_SendDNSRequest(websitename);
 	http_exchange_t *exch = calloc(1, sizeof(http_exchange_t));
 	exch->ip_dst = ip;
 	if(exch->ip_dst == 0xffffffff)
@@ -242,13 +144,12 @@ static http_status_t http_request(const char *request_type, const char* url, htt
 	while(!exch->connected)
 		web_WaitForEvents(); // Timeout ?
 	web_WaitForEvents();
-	os_PutStrFull("INITED ");
 
 	/* Building HTTP request */
 	size_t length = strlen(request_type) + 1 + !uri + 11 + 6 + strlen(url) + 4 + strlen(params); /* 10=" HTTP/1.1\r\n", 6="Host: ", 4="\r\n\r\n" */
 	
 	char *request = malloc(length+1);
-	sprintf(request, "%s %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", request_type, uri ? url+websitelen : "/", websitename, params);
+	sprintf(request, "%s %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", request_type, uri ? url+websitelen : "/", websitename, params);	
 	free(websitename);
 
 	/* Sending HTTP request */
@@ -273,12 +174,13 @@ static http_status_t http_request(const char *request_type, const char* url, htt
 	return status;
 }
 
-void add_tcp_queue(char *data, size_t length, http_exchange_t *exchange, uint16_t flags, size_t opt_size, const uint8_t *options) {
-	/**	- Add segment to send_queue (call push_tcp_segment)
+static void add_tcp_queue(char *data, size_t length, http_exchange_t *exchange, uint16_t flags, size_t opt_size, const uint8_t *options) {
+	/**
+	 *	- Add segment to send_queue (call web_PushTCPSegment)
 	 *	- Add segment to http queue (http_exchange_t pushed_seg field)
 	 *	- Increase the sequence number
 	 */
-	msg_queue_t *queued = push_tcp_segment(data, length, exchange->ip_dst, exchange->port_src, exchange->port_dst, exchange->cur_sn, exchange->cur_ackn, flags, opt_size, options);
+	msg_queue_t *queued = web_PushTCPSegment(data, length, exchange->ip_dst, exchange->port_src, exchange->port_dst, exchange->cur_sn, exchange->cur_ackn, flags, opt_size, options);
 	exchange->cur_sn += length;
 	pushed_seg_list_t *new_seg = malloc(sizeof(pushed_seg_list_t));
 	new_seg->relative_sn = (exchange->cur_sn) - exchange->beg_sn;
@@ -287,7 +189,7 @@ void add_tcp_queue(char *data, size_t length, http_exchange_t *exchange, uint16_
 	exchange->pushed_seg = new_seg;
 }
 
-void fetch_ack(http_exchange_t *exchange, uint32_t ackn) {
+static void fetch_ack(http_exchange_t *exchange, uint32_t ackn) {
 	/**
 	 *	Unofficial name: remove_tcp_segments_that_are_acked_by_ackn
 	 *	Note: The segments in pushed_seg list are in descending order.
@@ -310,7 +212,7 @@ void fetch_ack(http_exchange_t *exchange, uint32_t ackn) {
 
 	while(cur_seg) {
 		next_seg = cur_seg->next;
-		pop_message(cur_seg->seg);
+		web_popMessage(cur_seg->seg);
 		free(cur_seg);
 		cur_seg = next_seg;
 	}
@@ -318,7 +220,7 @@ void fetch_ack(http_exchange_t *exchange, uint32_t ackn) {
 	exchange->relative_seqacked = ackn-exchange->beg_sn;
 }
 
-usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+static usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
 	(void)port; /* Unused parameter */
 	if(protocol != TCP_PROTOCOL)
 		return USB_IGNORE;
@@ -332,7 +234,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		exch->beg_ackn = getBigEndianValue((uint8_t*)&tcp_seg->seq_number)+1;
 		exch->cur_ackn = exch->beg_ackn;
 		exch->connected = true;
-		send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+		web_SendTCPSegment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
 	}
 
 	/* If ACK */
@@ -340,7 +242,6 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 	if(ack_number-exch->beg_sn > exch->relative_seqacked && tcp_seg->dataOffset_flags&0x1000) {
 		fetch_ack(exch, ack_number);
 		if(!exch->connected && exch->fin_sent) {
-			os_PutStrFull("3 ");
 			web_UnlistenPort(exch->port_src);
 			free(exch);
 		}
@@ -350,22 +251,15 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 	if(tcp_seg->dataOffset_flags&0x0100) {
 		exch->connected = false;
 		if(exch->fin_sent) {
-			os_PutStrFull("1 ");
-			send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+			web_SendTCPSegment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
 			web_UnlistenPort(exch->port_src);
 			free(exch);
 		} else {
-			os_PutStrFull("2 ");
 			add_tcp_queue(NULL, 0, exch, FLAG_TCP_FIN|FLAG_TCP_ACK, 0, NULL);
 			exch->fin_sent = true;
 		}
 		return USB_SUCCESS;
 	}
-
-	/* MAIN LOOP */
-	asm_HomeUp();
-	boot_NewLine();
-	disp(exch->content_received);
 
 	const char *payload_response = (char*)msg + 4*(((tcp_segment_t*)msg)->dataOffset_flags>>4&0x0f);
 	if((char*)msg+length == payload_response) /* If there's no payload */
@@ -403,7 +297,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 			cur_el = cur_el->next;
 		}
 		if(cur_el && cur_el->relative_sn == new_segment_list->relative_sn) { /* deja vue */
-			send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+			web_SendTCPSegment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
 			return USB_SUCCESS;
 		} else {
 			new_segment_list->next = cur_el;
@@ -424,7 +318,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		cur_el = cur_el->next;
 	if(exch->cur_ackn-exch->beg_ackn != cur_el->relative_sn+cur_el->pl_length) {
 		exch->cur_ackn = exch->beg_ackn + cur_el->relative_sn + cur_el->pl_length;
-		send_tcp_segment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
+		web_SendTCPSegment(NULL, 0, exch->ip_dst, exch->port_src, exch->port_dst, exch->cur_sn, exch->cur_ackn, FLAG_TCP_ACK, 0, NULL);
 	}
 
 	/* Third process : trying to find what the Content-Length value is */
@@ -434,7 +328,6 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		char *payload_processing;
 
 		third_process:
-		os_PutStrFull("c ");
 
 		seg_processing = new_segment_list->segment;
 		payload_processing = (char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
@@ -487,7 +380,6 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		const char *payload_processing;
 
 		fourth_process:
-		os_PutStrFull("d ");
 		seg_processing = new_segment_list->segment;
 		payload_processing = (const char*)seg_processing + 4*(seg_processing->dataOffset_flags>>4&0x0f);
 
@@ -497,7 +389,6 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 			const char *ptr = payload_processing;
 
 			recursive_chunk:
-			os_PutStrFull("r ");
 			ptr += exch->chunk_counter;
 			exch->chunk_counter = getChunkSize(&ptr)+4;
 
@@ -516,12 +407,10 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		}
 	}
 
-	// FIN MAIN LOOP
 	if(!exch->content_length || (exch->content_length && exch->content_length>exch->content_received))
 		return USB_SUCCESS;
 
 	end_http_message:
-	os_PutStrFull("EEEEEEND ");
 
 	/* We store the data in an appvar, in order to relieve the heap */
 	if(exch->content_received > TI_MAX_SIZE) {
@@ -599,7 +488,7 @@ usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		new_http_data_el->next = http_data_list;
 	http_data_list = new_http_data_el;
 
-	lock_data(exch->data);
+	web_LockData(exch->data);
 	return USB_SUCCESS;
 }
 
@@ -615,8 +504,7 @@ static void wipe_data(http_exchange_t *exch) {
 }
 
 
-int unlock_data(http_data_t **http_data) {
-	// Il faudra avertir que c'est une opération dangereuse
+int web_UnlockData(http_data_t **http_data) {
 	if(!os_EnoughMem((*http_data)->size))
 		return 0;
 
@@ -637,7 +525,7 @@ int unlock_data(http_data_t **http_data) {
 	return 1;
 }
 
-int lock_data(http_data_t **http_data) {
+int web_LockData(http_data_t **http_data) {
 	os_ArcChk();
 	if((*http_data)->size >= os_TempFreeArc)
 		return 0;
@@ -674,12 +562,8 @@ void web_Cleanup() {
 	msg_queue_t *cur_queue = send_queue;
 	msg_queue_t *next_queue = NULL;
 	while(cur_queue) {
-		os_ClrHome();
-		debug(cur_queue->msg+40, 72);
-		while(!os_GetCSC()) {}
-
 		next_queue = cur_queue->next;
-		pop_message(cur_queue);
+		web_popMessage(cur_queue);
 		cur_queue = next_queue;
 	}
 
@@ -688,11 +572,7 @@ void web_Cleanup() {
 	http_data_list_t *next_data = NULL;
 	while(cur_data) {
 		next_data = cur_data->next;
-		if(os_DelVarArc(TI_APPVAR_TYPE, cur_data->varname))
-			os_PutStrFull("DELETED ");
-		else
-			os_PutStrFull("NOTDELED ");
-		while(!os_GetCSC()) {}
+		os_DelVarArc(TI_APPVAR_TYPE, cur_data->varname);
 		free(cur_data);
 		cur_data = next_data;
 	}
@@ -700,27 +580,8 @@ void web_Cleanup() {
 	usb_Cleanup();
 }
 
-void fetch_arp_msg(eth_frame_t *ethernet_frame) {
-	arp_message_t *arp_msg = (arp_message_t*)((uint8_t*)ethernet_frame + sizeof(eth_frame_t) - 4);
-	if(ethernet_frame->Ethertype != ETH_ARP || arp_msg->HwType != 0x0100 || arp_msg->Operation != 0x0100 || arp_msg->ProtocolType != ETH_IPV4 || arp_msg->IP_dst != IP_ADDR)
-		return;
-	arp_message_t *resp = malloc(sizeof(arp_message_t));
-	memcpy((uint8_t*)resp->MAC_dst, (uint8_t*)arp_msg->MAC_src, 10);
-	memcpy((uint8_t*)resp->MAC_src, MAC_ADDR, 6);
-	resp->IP_src = IP_ADDR;
-	resp->Operation = 0x0200;
-	resp->HwType = 0x0100;
-	resp->ProtocolType = 0x0008;
-	resp->HwAddrLength = 0x06;
-	resp->ProtocolAddrLength = 0x04;
 
-	msg_queue_t *queued = push_ethernet_frame((uint8_t*)resp, sizeof(arp_message_t), ETH_ARP);
-	queued->waitingTime += 100; /* We don't want the segment to be sent as a "repeated segment" */
-	usb_ScheduleTransfer(queued->endpoint, queued->msg, queued->length, send_callback, queued);
-	free(resp);
-}
-
-void send_arp_query(uint32_t ip) {
+void web_SendARPQuery(uint32_t ip) {
 	eth_frame_t *frame = calloc(1, sizeof(eth_frame_t)-4 + sizeof(arp_message_t));
 	arp_message_t *arp_msg = (arp_message_t*)((uint8_t*)frame+sizeof(eth_frame_t)-4);
 	memset(frame->MAC_dst, 0xff, 6);
@@ -729,21 +590,27 @@ void send_arp_query(uint32_t ip) {
 	memcpy((uint8_t*)arp_msg->MAC_src, MAC_ADDR, 6);
 	arp_msg->IP_src = IP_ADDR;
 	arp_msg->Operation = 0x0100;
-	send_rndis_packet((uint8_t*)arp_msg, sizeof(eth_frame_t)-4 + sizeof(arp_message_t));
+	web_SendRNDISPacket((uint8_t*)arp_msg, sizeof(eth_frame_t)-4 + sizeof(arp_message_t));
 	free(frame);
 }
 
-uint32_t send_dns_request(const char *addr) {
+uint32_t web_SendDNSRequest(const char *url) {
 	uint32_t res_ip = 0;
-	push_dns_request(addr, &res_ip);
+	web_ScheduleDNSRequest(url, &dns_callback, &res_ip);
 	while(!res_ip)
 		web_WaitForEvents();
 	return res_ip;
 }
 
-void push_dns_request(const char *addr, uint32_t *res_ip) {
+static usb_error_t dns_callback(web_port_t port, uint32_t res_ip, web_callback_data_t *user_data) {
+	(void)port;
+	*((uint32_t*)user_data) = res_ip;
+	return (res_ip!=0xffffffff)*USB_ERROR_FAILED;
+}
+
+void web_ScheduleDNSRequest(const char *url, web_dns_callback_t *callback, web_callback_data_t *user_data) {
 	/* Returns -1 or error */
-	size_t length = sizeof(dns_message_t)+strlen(addr)+2+4; /* 2=length byte at the begining of the string+0 terminated string */
+	size_t length = sizeof(dns_message_t)+strlen(url)+2+4; /* 2=length byte at the begining of the string+0 terminated string */
 	uint8_t *query = calloc(length, 1);
 
 	query[2] = 0x01;
@@ -751,7 +618,7 @@ void push_dns_request(const char *addr, uint32_t *res_ip) {
 
 	/* formating address for dns purposes */
 	char *cursor_qry = (char*)(query+sizeof(dns_message_t)+1);
-	char *cursor_str = (char*)addr;
+	char *cursor_str = (char*)url;
 	uint8_t i = 1;
 	while(*cursor_str) {
 		if(*cursor_str == '.') {
@@ -770,27 +637,29 @@ void push_dns_request(const char *addr, uint32_t *res_ip) {
 
 	web_port_t client_port = web_RequestPort();
 	dns_exchange_t *dns_exch = malloc(sizeof(dns_exchange_t));
-	dns_exch->res_ip = res_ip;
-	dns_exch->queued_request = push_udp_datagram(query, length, netinfo.DNS_IP_addr, client_port, DNS_PORT);
+	dns_exch->callback = callback;
+	dns_exch->user_data = user_data;
+	dns_exch->queued_request = web_PushUDPDatagram(query, length, netinfo.DNS_IP_addr, client_port, DNS_PORT);
 	free(query);
 
 	web_ListenPort(client_port, fetch_dns_msg, dns_exch);
 }
 
-usb_error_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+static usb_error_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
 	(void)port; (void)length; /* Unused parameters */
 	if(protocol != UDP_PROTOCOL)
 		return USB_IGNORE;
 	dns_exchange_t *exch = (dns_exchange_t*)user_data;
-	pop_message(exch->queued_request);
+	web_popMessage(exch->queued_request);
 
 	const udp_datagram_t *udp_dtgm = (udp_datagram_t*)msg;
 	if(udp_dtgm->port_src/256 == DNS_PORT && udp_dtgm->port_src%256 == 0x00) {
 		const dns_message_t *dns_msg = (dns_message_t*)((uint8_t*)udp_dtgm + sizeof(udp_datagram_t));
 
 		if(!(dns_msg->flags&0x8000) || !(dns_msg->flags&0x0080) || (dns_msg->flags&0x0F00)) { /* if -> it isn't a response OR the recursion wasn't available OR an error occurred */
-			*exch->res_ip = 0xffffffff;
-			return USB_ERROR_FAILED;
+			usb_error_t ret_err = (*exch->callback)(port, 0xffffffff, exch->user_data);
+			free(exch);
+			return ret_err;
 		}
 		const uint8_t nb_answers = dns_msg->answerRRs>>8;
 		const uint8_t nb_queries = dns_msg->questions>>8;
@@ -808,28 +677,24 @@ usb_error_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t l
 			i++;
 		}
 		if(i == nb_answers) {
-			*exch->res_ip = 0xffffffff;
-			return USB_ERROR_FAILED;
+			usb_error_t ret_err = (*exch->callback)(port, 0xffffffff, exch->user_data);
+			free(exch);
+			return ret_err;
 		}
 
 		ptr += 12;
-		*exch->res_ip = *((uint32_t*)ptr); /* Warning : returning the little endian value */
-
-		return USB_SUCCESS;
+		usb_error_t ret_err = (*exch->callback)(port, *((uint32_t*)ptr), exch->user_data);
+		free(exch);
+		return ret_err;
 	}
 
+	free(exch);
 	return USB_IGNORE;
 }
 
 static msg_queue_t *dhcp_last_queued_msg = NULL;
 static uint8_t phase = 0; /* 0=not initiated, 1=discover sent, 2=request sent, 3=done */
-void dhcp_init() {
-	/**
-	 *	Sends an IPv4 request to the local server.
-	 *	The RNDIS netinfo must have been initialized with rndis_init() first.
-	 *	@return USB_SUCCESS or an error.
-	 *	@output netinfo correct attributes (router_MAC_addr, DNS_IP_addr, DHCP_IP_addr) and static variable IP_ADDR.
-	 */
+static void dhcp_init() {
 	/* DHCP DISCOVERY */
 	static uint32_t xid = 0x03F82639;
 	if(phase != 0) /* if an init() is already running */
@@ -847,13 +712,13 @@ void dhcp_init() {
 	((uint32_t*)data_disc)[59] = 0x63538263;
 	memcpy(data_disc+240, &options_disc, sizeof(options_disc));
 
-	dhcp_last_queued_msg = push_udp_datagram(data_disc, length_disc, 0xffffffff, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
+	dhcp_last_queued_msg = web_PushUDPDatagram(data_disc, length_disc, 0xffffffff, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
 	free(data_disc);
 	phase = 1;
 	xid++;
 }
 
-usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+static usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
 	(void)port; (void)length; (void)user_data; /* Unused parameters */
 
 	if(protocol != UDP_PROTOCOL)
@@ -868,7 +733,7 @@ usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 			switch(*cur_opt) {
 				case 53: /* DHCP message type */
 					if(*(cur_opt+2) == 2 && phase == 1) { /* DHCP Offer */
-						pop_message(dhcp_last_queued_msg);
+						web_popMessage(dhcp_last_queued_msg);
 						const uint8_t beg_header[] = {0x01, 0x01, 0x06, 0x00};
 						const uint8_t options_req[] = {53, 1, 3, 0x37, 3, 1, 3, 6, 54, 4, 0, 0, 0, 0, 50, 4, 0, 0, 0, 0, 0xFF};
 						const size_t length_req = sizeof(dhcp_message_t)+21; /*1=0xFF, 20=options */
@@ -880,17 +745,17 @@ usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 						memcpy(data_req+240, &options_req, 21);
 						((uint32_t*)(data_req+2))[62] = netinfo.DHCP_IP_addr;
 						((uint32_t*)data_req)[64] = dhcp_msg->yiaddr;
-						dhcp_last_queued_msg = push_udp_datagram(data_req, length_req, 0xffffffff, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
+						dhcp_last_queued_msg = web_PushUDPDatagram(data_req, length_req, 0xffffffff, CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
 						phase = 2;
 					} else if(*(cur_opt+2) == 5 && phase == 2) { /* ACK */
-						pop_message(dhcp_last_queued_msg);
+						web_popMessage(dhcp_last_queued_msg);
 						dhcp_last_queued_msg = NULL;
 						IP_ADDR = dhcp_msg->yiaddr;
 						memcpy(netinfo.router_MAC_addr, src_mac_addr, 6);
 						phase = 3;
 					} else if(*(cur_opt+2) == 6) { /* NACK */
 						if(dhcp_last_queued_msg) {
-							pop_message(dhcp_last_queued_msg);
+							web_popMessage(dhcp_last_queued_msg);
 							dhcp_last_queued_msg = NULL;
 						}
 						phase = 0;
@@ -914,32 +779,19 @@ usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 }
 
 
-usb_error_t send_tcp_segment(char *data, size_t length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
-	msg_queue_t *queued = push_tcp_segment(data, length, ip_dst, port_src, port_dst, seq_number, ack_number, flags, opt_size, options);
+usb_error_t web_SendTCPSegment(char *data, size_t length, uint32_t ip_dst, web_port_t port_src, web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
+	msg_queue_t *queued = web_PushTCPSegment(data, length, ip_dst, port_src, port_dst, seq_number, ack_number, flags, opt_size, options);
 	queued->waitingTime += 100; /* We don't want the segment to be sent as a "repeated segment" */
 	return usb_ScheduleTransfer(queued->endpoint, queued->msg, queued->length, send_callback, queued);
 }
 
 static usb_error_t send_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data) {
 	(void)endpoint; (void)status; (void)transferred; /* Unused parameters */
-	pop_message((msg_queue_t*)data);
+	web_popMessage((msg_queue_t*)data);
 	return USB_SUCCESS;
 }
 
-msg_queue_t *push_tcp_segment(char *data, size_t length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
-	/**
-	 *	Encapsulates data with a TCP header.
-	 *	The current version is not able to break down data into several ipv4 packets.
-	 *	Consequently, this lib is not aim at uploading large amount of data.
-	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
-	 *	@param length Points to the size of *data.
-	 *	@param ip_dst The IP of the target server.
-	 *	@param port_dst The destination port. For example HTTP (80).
-	 *	@param ack_number The 32-bits number that must be written in the ACK field.
-	 *	@param flags For example FLAG_TCP_ACK for acknowledging a segment.
-	 *	@param options The options, or NULL if there is no option. THE SIZE OF THE ARRAY MUST BE A MULTIPLE OF 4.
-	 *	@output data points to the data encapsulated. length points to the new length of *data.
-	 */
+msg_queue_t *web_PushTCPSegment(char *data, size_t length, uint32_t ip_dst, web_port_t port_src, web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
 	uint8_t *tcp_seg = calloc(length+sizeof(tcp_segment_t), 1);
 	tcp_seg[0] = port_src/256;
 	tcp_seg[1] = port_src%256;
@@ -967,12 +819,12 @@ msg_queue_t *push_tcp_segment(char *data, size_t length, uint32_t ip_dst, uint16
 	tcp_seg[16] = chksm/256;
 	tcp_seg[17] = chksm%256;
 
-	msg_queue_t *queued = push_ipv4_packet(tcp_seg, length+sizeof(tcp_segment_t)+opt_size, IP_ADDR, ip_dst, TCP_PROTOCOL);
+	msg_queue_t *queued = web_PushIPv4Packet(tcp_seg, length+sizeof(tcp_segment_t)+opt_size, IP_ADDR, ip_dst, TCP_PROTOCOL);
 	free(tcp_seg);
 	return queued;
 }
 
-uint16_t transport_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
+static uint16_t transport_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
 	uint16_t chksmmsb = length/256 + (ip_dst/65536&0xff) + (ip_dst&0xff) + (ip_src/65536&0xff) + (ip_src&0xff);
 	uint16_t chksmlsb = protocol + length%256 + (ip_dst/16777216&0xff) + (ip_dst/256&0xff) + (ip_src/16777216&0xff) + (ip_src/256&0xff);
 	for(size_t i=0; i<length-1; i+=2) {
@@ -987,14 +839,7 @@ uint16_t transport_checksum(uint8_t *data, size_t length, uint32_t ip_src, uint3
 }
 
 
-msg_queue_t *push_udp_datagram(uint8_t *data, size_t length, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst) {
-	/**
-	 *	Encapsulates data with an UDP header.
-	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
-	 *	@param length Points to the size of *data.
-	 *	@param port_dst The destination port. For example DHCP_PORT (68) or DNS_PORT (53).
-	 *	@output data points to the data encapsulated. length points to the new length of *data.
-	 */
+msg_queue_t *web_PushUDPDatagram(uint8_t *data, size_t length, uint32_t ip_dst, web_port_t port_src, web_port_t port_dst) {
 	uint8_t *datagram = calloc(length+sizeof(udp_datagram_t), 1);
 	datagram[0] = port_src/256;
 	datagram[1] = port_src%256;
@@ -1007,23 +852,14 @@ msg_queue_t *push_udp_datagram(uint8_t *data, size_t length, uint32_t ip_dst, ui
 	datagram[6] = chksm/256;
 	datagram[7] = chksm%256;
 	
-	msg_queue_t *queued = push_ipv4_packet(datagram, length+sizeof(udp_datagram_t), IP_ADDR, ip_dst, UDP_PROTOCOL);
+	msg_queue_t *queued = web_PushIPv4Packet(datagram, length+sizeof(udp_datagram_t), IP_ADDR, ip_dst, UDP_PROTOCOL);
 	free(datagram);
 
 	return queued;
 }
 
 
-msg_queue_t *push_ipv4_packet(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
-	/**
-	 *	Encapsulates data with an IPv4 header.
-	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
-	 *	@param length Points to the size of *data.
-	 *	@param ip_src Your IP or 0.0.0.0 if you have been attributed no IP yet (for DHCP requests for example).
-	 *	@param ip_dst The IP of the target server.
-	 *	@param protocol Protocol of the data. For example ICMP_PROTOCOL (0x01), TCP_PROTOCOL (0x06) or UDP_PROTOCOL (0x11).
-	 *	@output data points to the data encapsulated. length points to the new length of *data.
-	 */
+msg_queue_t *web_PushIPv4Packet(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
 	static uint16_t nbpacket = 0;
 	const size_t size = length+sizeof(ipv4_packet_t);
 	const ipv4_packet_t packet = {0x45, 0x10, 0, 0, 0x40, 0x80, 0, 0, 0, 0};
@@ -1042,13 +878,13 @@ msg_queue_t *push_ipv4_packet(uint8_t *data, size_t length, uint32_t ip_src, uin
 	memcpy(ipv4_pckt+sizeof(ipv4_packet_t), data, length);
 	nbpacket++;
 
-	msg_queue_t *queued = push_ethernet_frame(ipv4_pckt, size, ETH_IPV4);
+	msg_queue_t *queued = web_PushEthernetFrame(ipv4_pckt, size, ETH_IPV4);
 	free(ipv4_pckt);
 
 	return queued;
  }
 
-uint16_t ipv4_checksum(uint16_t *header, size_t length) {
+static uint16_t ipv4_checksum(uint16_t *header, size_t length) {
 	uint24_t sum = 0;
 	for(size_t i=0; i<length/2; i++) 
 		sum += header[i];
@@ -1056,13 +892,7 @@ uint16_t ipv4_checksum(uint16_t *header, size_t length) {
 }
 
 
-msg_queue_t *push_ethernet_frame(uint8_t *data, size_t length, uint16_t protocol) {
-	/**
-	 *	Encapsulates data with an ethernet header.
-	 *	@param **data Pointer of the data to be encapsulated, allocated with malloc.
-	 *	@param length Points to the size of *data.
-	 *	@output data points to the data encapsulated. length points to the new length of *data.
-	 */
+msg_queue_t *web_PushEthernetFrame(uint8_t *data, size_t length, uint16_t protocol) {
 	uint8_t *frame; 
 	if(length<46) /* An ethernet frame must be at least 64B */
 		frame = calloc(64, 1);
@@ -1079,20 +909,19 @@ msg_queue_t *push_ethernet_frame(uint8_t *data, size_t length, uint16_t protocol
 	uint32_t crc = crc32b(frame, length-4);
 	memcpy(frame+length-4, &crc, 4);
 
-	msg_queue_t *queued = push_rndis_packet(frame, length);
+	msg_queue_t *queued = web_PushRNDISPacket(frame, length);
 	free(frame);
 
 	return queued;
 }
 
 #define CRC_POLY 0xEDB88320
-uint32_t crc32b(uint8_t *data, size_t length) {
+static uint32_t crc32b(uint8_t *data, size_t length) {
 	/**
 	 *	Computes ethernet crc32.
 	 *	Code found on stackoverflow.com (no licence was given to the code)
 	 */
-	// IL FAUT EN PARLER AVEC QUELQU'UN
-	// LORS DE LA DEUXIÈME BOUCLE EMBRIQUÉE, IL A DIT NTM ET BOUCLE DANS LA VIDE
+	// LES BOUCLES IMBRIQUEES FREEZENT AVEC LA TOOLCHAIN
     uint32_t crc;
 	size_t j;
 
@@ -1114,14 +943,7 @@ uint32_t crc32b(uint8_t *data, size_t length) {
 }
 
 
-msg_queue_t *push_rndis_packet(uint8_t *data, size_t length) {
-	/**
-	 *	Sends a packet to the rndis device.
-	 *	Blocks until the transfer finishes.
-	 *	@param **data Pointer of the data to be sent, allocated with malloc.
-	 *	@param length Points to the size of *data.
-	 *	@return USB_SUCCESS or an error.
-	 */
+msg_queue_t *web_PushRNDISPacket(uint8_t *data, size_t length) {
 	uint8_t *pckt = malloc(sizeof(rndis_packet_msg_t)+length);
 	memset(pckt, 0, sizeof(rndis_packet_msg_t));
 	pckt[0] = RNDIS_PACKET_MSG;
@@ -1132,10 +954,10 @@ msg_queue_t *push_rndis_packet(uint8_t *data, size_t length) {
 	pckt[13] = length/256;
 	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
 
-	return push_message(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), packets_callback, NULL);
+	return web_pushMessage(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), packets_callback, NULL);
 }
 
-usb_error_t send_rndis_packet(uint8_t *data, size_t length) {
+usb_error_t web_SendRNDISPacket(uint8_t *data, size_t length) {
 	uint8_t *pckt = malloc(sizeof(rndis_packet_msg_t)+length);
 	memset(pckt, 0, sizeof(rndis_packet_msg_t));
 	pckt[0] = RNDIS_PACKET_MSG;
@@ -1157,12 +979,6 @@ static usb_error_t send_rndis_callback(usb_endpoint_t endpoint, usb_transfer_sta
 
 
 void web_Init() {
-	/**
-		Waits until a rndis device is detected
-		If any key is pressed, returns USB_IGNORE.
-		If the RNDIS Device has been initialized properly, returns USB_SUCCESS.
-		If not, returns an error.
-	**/
 	netinfo.int_wc = 0;
 	netinfo.int_cdc = 0;
 	netinfo.ep_wc = 0;
@@ -1181,7 +997,7 @@ void web_Init() {
 }
 
 
-size_t getChunkSize(const char **ascii) {
+static size_t getChunkSize(const char **ascii) {
 	/**
 	 *	Considering this is a correct chunk size :
 	 *	-> 0x0a0d terminated
@@ -1200,18 +1016,18 @@ size_t getChunkSize(const char **ascii) {
 	return size;
 }
 
-bool cmpbroadcast(const uint8_t *mac_addr) {
+static bool cmpbroadcast(const uint8_t *mac_addr) {
 	bool is_brdcst = true;
 	for(int i=0; i<6; i++)
 		is_brdcst = is_brdcst && *(mac_addr+i)==0xff;
 	return is_brdcst;
 }
 
-uint32_t getBigEndianValue(uint8_t *beVal) {
+static uint32_t getBigEndianValue(uint8_t *beVal) {
 	return beVal[0]*16777216 + beVal[1]*65536 + beVal[2]*256 + beVal[3];
 }
 
-uint32_t getMyIPAddr() {
+uint32_t web_getMyIPAddr() {
 	return IP_ADDR;
 }
 
@@ -1224,44 +1040,43 @@ usb_error_t web_WaitForEvents() {
 	uint8_t msg[MAX_SEGMENT_SIZE+100];
 	uint8_t *fetched = msg;
 	const uint32_t beg_time = rtc_Time();
-	usb_error_t sched_err;
+	usb_error_t err;
 	
 	if(!netinfo.connected)
 		return usb_HandleEvents();
 
-	sched_err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
-	if(sched_err != USB_SUCCESS)
-		return sched_err;
+	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
+	if(err != USB_SUCCESS)
+		return err;
 
 	while(fetched) {
 		if(beg_time + TIMEOUT <= rtc_Time())
 			return USB_ERROR_TIMEOUT;
 		while(cur_msg) {
 			if(cur_msg->waitingTime <= rtc_Time()) {
-				os_PutStrFull(".");
 				cur_msg->waitingTime = rtc_Time() + SEND_EVERY;
 				usb_Transfer(cur_msg->endpoint, cur_msg->msg, cur_msg->length, 3, NULL);
 			}
 			cur_msg = cur_msg->next;
 		}
-		usb_HandleEvents();
+		err = usb_HandleEvents();
 	}
-	return USB_SUCCESS;
+	return err;
 }
 
 web_port_t web_RequestPort() {
-	static web_port_t next_port = 0x9000;
+	static web_port_t next_port = 0xC000;
 	if(next_port)
 		return next_port++;
 	else
 		return 0;
 }
 
-void web_ListenPort(web_port_t port, web_port_event_t *callback, web_callback_data_t *callback_data) {
+void web_ListenPort(web_port_t port, web_port_callback_t *callback, web_callback_data_t *user_data) {
 	port_list_t *new_port = malloc(sizeof(port_list_t));
 	new_port->port = port;
 	new_port->callback = callback;
-	new_port->callback_data = callback_data;
+	new_port->callback_data = user_data;
 	new_port->next = listened_ports;
 	listened_ports = new_port;
 }
@@ -1283,6 +1098,35 @@ void web_UnlistenPort(web_port_t port) {
 		cur_port = next_port;
 	}
 }
+
+
+msg_queue_t *web_pushMessage(uint8_t *msg, size_t length, usb_endpoint_t endpoint, web_transfer_callback_t callback, web_callback_data_t *user_data) {
+	msg_queue_t *new_msg = malloc(sizeof(msg_queue_t));
+	new_msg->length = length;
+	new_msg->msg = msg;
+	new_msg->waitingTime = rtc_Time();
+	new_msg->endpoint = endpoint;
+	new_msg->callback = callback;
+	new_msg->user_data = user_data;
+	new_msg->prev = NULL;
+	new_msg->next = send_queue;
+	if(send_queue)
+		send_queue->prev = new_msg;
+	send_queue = new_msg;
+	return new_msg;
+}
+
+void web_popMessage(msg_queue_t *msg) {
+	if(msg->prev)
+		msg->prev->next = msg->next;
+	else
+		send_queue = msg->next;
+	if(msg->next)
+		msg->next->prev = NULL;
+	free(msg->msg);
+	free(msg);
+}
+
 
 static usb_error_t call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port) {
 	port_list_t *cur_listenedPort = listened_ports;
@@ -1310,37 +1154,17 @@ static usb_error_t fetch_udp_datagram(udp_datagram_t *datagram, size_t length, u
 		return USB_ERROR_FAILED;
 }
 
+static usb_error_t fetch_icmpv4_msg(icmpv4_echo_t *msg, size_t length, uint32_t ip_src) {
+	if(msg->type != ICMP_ECHO_REQUEST || msg->code != 0)
+		return USB_IGNORE;
 
-msg_queue_t *push_message(uint8_t *msg, size_t length, usb_endpoint_t endpoint, usb_transfer_callback_t callback, usb_callback_data_t *user_data) {
-	msg_queue_t *new_msg = malloc(sizeof(msg_queue_t));
-	new_msg->length = length;
-	new_msg->msg = msg;
-	new_msg->waitingTime = rtc_Time();
-	new_msg->endpoint = endpoint;
-	new_msg->callback = callback;
-	new_msg->user_data = user_data;
-	new_msg->prev = NULL;
-	new_msg->next = send_queue;
-	if(send_queue)
-		send_queue->prev = new_msg;
-	send_queue = new_msg;
-	//os_PutStrFull("Push ");
-	return new_msg;
+	msg->type = ICMP_ECHO_REPLY;
+	msg->checksum += ICMP_ECHO_REQUEST - ICMP_ECHO_REPLY; /* Difference between the two messages */
+	/* Send IPv4 packet */
+	msg_queue_t *queued = web_PushIPv4Packet((uint8_t*)msg, length, IP_ADDR, ip_src, ICMP_PROTOCOL);
+	queued->waitingTime += 100; /* We don't want the segment to be sent as a "repeated segment" */
+	return usb_ScheduleTransfer(queued->endpoint, queued->msg, queued->length, send_callback, queued);
 }
-
-void pop_message(msg_queue_t *msg) {
-	if(msg->prev)
-		msg->prev->next = msg->next;
-	else
-		send_queue = msg->next;
-	if(msg->next)
-		msg->next->prev = NULL;
-	free(msg->msg);
-	free(msg);
-	//os_PutStrFull("Pop ");
-}
-
-
 
 static usb_error_t fetch_IPv4_packet(ipv4_packet_t *pckt, size_t length) {
 	if(pckt->Protocol == TCP_PROTOCOL) {
@@ -1349,8 +1173,31 @@ static usb_error_t fetch_IPv4_packet(ipv4_packet_t *pckt, size_t length) {
 	} else if(pckt->Protocol == UDP_PROTOCOL) {
 		udp_datagram_t *udp_dtgm = (udp_datagram_t*)((uint8_t*)pckt + (pckt->VerIHL&0x0F)*4);
 		return fetch_udp_datagram(udp_dtgm, length-(pckt->VerIHL&0x0F)*4, pckt->IP_addr_src, pckt->IP_addr_dst);
+	} else if(pckt->Protocol == ICMP_PROTOCOL) {
+		icmpv4_echo_t *msg = (icmpv4_echo_t*)((uint8_t*)pckt + (pckt->VerIHL&0x0F)*4);
+		return fetch_icmpv4_msg(msg, length-(pckt->VerIHL&0x0F)*4, pckt->IP_addr_src);
 	} else
 		return USB_IGNORE;
+}
+
+static void fetch_arp_msg(eth_frame_t *ethernet_frame) {
+	arp_message_t *arp_msg = (arp_message_t*)((uint8_t*)ethernet_frame + sizeof(eth_frame_t) - 4);
+	if(ethernet_frame->Ethertype != ETH_ARP || arp_msg->HwType != 0x0100 || arp_msg->Operation != 0x0100 || arp_msg->ProtocolType != ETH_IPV4 || arp_msg->IP_dst != IP_ADDR)
+		return;
+	arp_message_t *resp = malloc(sizeof(arp_message_t));
+	memcpy((uint8_t*)resp->MAC_dst, (uint8_t*)arp_msg->MAC_src, 10);
+	memcpy((uint8_t*)resp->MAC_src, MAC_ADDR, 6);
+	resp->IP_src = IP_ADDR;
+	resp->Operation = 0x0200;
+	resp->HwType = 0x0100;
+	resp->ProtocolType = 0x0008;
+	resp->HwAddrLength = 0x06;
+	resp->ProtocolAddrLength = 0x04;
+
+	msg_queue_t *queued = web_PushEthernetFrame((uint8_t*)resp, sizeof(arp_message_t), ETH_ARP);
+	queued->waitingTime += 100; /* We don't want the segment to be sent as a "repeated segment" */
+	usb_ScheduleTransfer(queued->endpoint, queued->msg, queued->length, send_callback, queued);
+	free(resp);
 }
 
 static usb_error_t fetch_ethernet_frame(eth_frame_t *frame, size_t length) {
@@ -1474,7 +1321,7 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 
 
 #ifdef DEBUG
-static void debug(const void *addr, size_t len) {
+void debug(const void *addr, size_t len) {
 	uint8_t *content = (uint8_t*)addr;
 	char tmp[4];
 	size_t i;
@@ -1491,7 +1338,7 @@ static void debug(const void *addr, size_t len) {
 	boot_NewLine();
 }
 
-static void disp(unsigned int val) {
+void disp(unsigned int val) {
 	uint24_t value = (uint24_t)val;
 	char tmp[20];
 	sprintf(tmp, "DISP : %u ", value);
