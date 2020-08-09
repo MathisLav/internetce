@@ -13,10 +13,10 @@ This is a high-level library for interfacing with the internet on Ti-84+CE and T
 ## Example of use
 First, create a project in your toolchain folder.
 Then :
- * Put src/internet.c and src/utils.asm in the src/ folder.
- * Put include/internetstatic.h in your include/ folder.
- * Put include/internet.h **in the include/ folder of the toolchain**
- * At last, create a file in the src/ folder with your main()  
+ * Put `src/internet.c` and `src/utils.asm` in the `src/` folder.
+ * Put `include/internetstatic.h` in your `include/` folder.
+ * Put `include/internet.h` **in the `include/` folder of the toolchain**
+ * At last, create a file in the `src/` folder with your main()  
 The minimal program using this lib can be :
 ```c
 #include <internet.h>
@@ -30,6 +30,8 @@ int main(void) {
 	return 0;
 }
 ```
+***Warning :*** You will need the USBDRVCE lib from the toolchain to make it work! *(See: https://github.com/CE-Programming/toolchain/tree/usbdrvce)*  
+For those who understand french (or those who know how to use google translate), a way to use USBDRVCE is explained here : (SOON)
 
 ## Help & Bug report
 Some examples of use are available in the tests/ folder. You can draw inspiration from those programs. If you can't find what you want, feel free to ask your questions on forums such as tiplanet.org or cemetech.net.
