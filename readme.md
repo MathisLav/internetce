@@ -5,22 +5,29 @@ This is a high-level library for interfacing with the internet on Ti-84+CE and T
 ## Getting started
   * Plug the calculator to a RNDIS device (basically your phone). To this end, you may need to buy an adapter. The "final cable" you need is something that has a male mini USB Type A at one end (for the calculator) and a male micro USB or USB Type C at the other end (for your phone). You can use for example :
 	* The charger of your phone (USB <-> Micro USB or USB Type C) (you may already have this).
-	* And A Mini USB Type A Male <-> USB Female cable - For example :  https://aliexpress.com/item/32780744354.html
+	* And A Mini USB Type A Male <-> USB Female cable - For example :  https://aliexpress.com/item/32780744354.html  
 	Warning : Make sure you choose the Mini A cable (in the color section)!
 * Transfer a program that has been compiled with the library.
 * Run it, and enable the USB internet connection sharing. On Android, it should be in `Settings->Tethering & portable hotspot->USB tethering`.
 
-## Example
+## Example of use
+First, create a project in your toolchain folder.
+Then :
+ * Put src/internet.c in the src/ folder
+ * Copy the content of include/ in your include folder
+ * At last, create a file in the src/ folder with your main()  
 The minimal program using this lib can be :
 ```c
-	int main(void) {
-		web_Init();
-		while(!web_Connected())
-			web_WaitForEvents();
-		// Do whatever you want
-		web_Cleanup();
-		return 0;
-	}
+#include <internet.h>
+
+int main(void) {
+	web_Init();
+	while(!web_Connected())
+		web_WaitForEvents();
+	// Do whatever you want
+	web_Cleanup();
+	return 0;
+}
 ```
 
 ## Help & Bug report
