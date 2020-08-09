@@ -347,16 +347,6 @@ typedef struct http_exchange {
 #define FLAG_TCP_ACK		1 << 4
 
 
-
-
-//***********************************************************************************************
-//
-// Déplacer les fonctions statiques ainsi que les struct "statiques" dans un autre header .h
-//
-//***********************************************************************************************
-
-
-
 /**
  *	@brief	Initialize the library.
  *	@note	The end user must call this function and wait until web_Connected()
