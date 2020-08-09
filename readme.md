@@ -13,8 +13,9 @@ This is a high-level library for interfacing with the internet on Ti-84+CE and T
 ## Example of use
 First, create a project in your toolchain folder.
 Then :
- * Put src/internet.c in the src/ folder
- * Copy the content of include/ in your include folder
+ * Put src/internet.c in the src/ folder.
+ * Put include/internetstatic.h in your include/ folder.
+ * Put include/internet.h **in the include/ folder of the toolchain**
  * At last, create a file in the src/ folder with your main()  
 The minimal program using this lib can be :
 ```c
