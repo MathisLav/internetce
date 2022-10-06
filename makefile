@@ -1,24 +1,16 @@
 # ----------------------------
-# Program Options
+# Makefile Options
 # ----------------------------
 
-NAME         ?= INTERNET
-MAIN_ARGS    ?= NO
-COMPRESSED   ?= NO
-ARCHIVED     ?= NO
-CEDEV		 ?= ../../
+NAME = INTERNET
+COMPRESSED = NO
+ARCHIVED = NO
+
+# In the v10.2 of the toolchain, the optimization parameters don't work
+CFLAGS = -Wall -Wextra #-Oz
+CXXFLAGS = -Wall -Wextra #-Oz
 
 # ----------------------------
-# Compile Options
-# ----------------------------
 
-OPT_MODE     ?= -Oz
-EXTRA_CFLAGS ?= -Wall -Wextra
+include $(shell cedev-config --makefile)
 
-# ----------------------------
-# Debug Options
-# ----------------------------
-
-OUTPUT_MAP   ?= NO
-
-include $(CEDEV)/include/.makefile

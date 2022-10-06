@@ -17,7 +17,6 @@
 *.pch
 
 # Libraries
-*.lib
 *.a
 *.la
 *.lo
@@ -58,4 +57,3 @@ old/*
 
 # dependancies
 clibs.8xg
-usbdrvce.8xv

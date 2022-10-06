@@ -21,6 +21,7 @@ _DelMem			equ		0020590h
 _InsertMem		equ		0020514h
 
 
+	section .text
 	public _MoveToArc
 _MoveToArc:
 	call __frameset0
@@ -44,6 +45,7 @@ _MoveToArc:
 	ret
 
 
+	section .text
 	public _MoveToRam
 _MoveToRam:
 	call __frameset0
@@ -67,6 +69,7 @@ _MoveToRam:
 	ret
 
 
+	section .text
 	public _os_EnoughMem
 _os_EnoughMem:
 	pop de
@@ -80,6 +83,7 @@ _os_EnoughMem:
 	ret
 
 
+	section .text
 	public _os_DelVarArc
 _os_DelVarArc:
 	call __frameset0
@@ -100,6 +104,7 @@ _os_DelVarArc:
 	sbc hl,hl
 	ret
 
+	section .text
 	public _ResizeAppVar
 _ResizeAppVar:
 	; @warning	The AppVar must reside in RAM

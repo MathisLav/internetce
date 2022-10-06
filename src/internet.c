@@ -350,7 +350,7 @@ static usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, 
 			while(ptr-(char*)seg_processing<(int)length && (*ptr != 0x0d || *(ptr+1) != 0x0a)) ptr++;
 		}
 		/* If the payload is more large than we can handle, returning. */
-		if(exch->content_length>TI_MAX_SIZE) {
+		if(exch->content_length>OS_VAR_MAX_SIZE) {
 			wipe_data(exch);
 			exch->status = SYSTEM_NOT_ENOUGH_MEM;
 			return USB_ERROR_NO_MEMORY;
@@ -413,7 +413,7 @@ static usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, 
 	end_http_message:
 
 	/* We store the data in an appvar, in order to relieve the heap */
-	if(exch->content_received > TI_MAX_SIZE) {
+	if(exch->content_received > OS_VAR_MAX_SIZE) {
 		wipe_data(exch);
 		exch->status = SYSTEM_NOT_ENOUGH_MEM;
 		return USB_ERROR_NO_MEMORY;
@@ -422,7 +422,7 @@ static usb_error_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, 
 	char varstorage_name[9] = "WLCE0000";
 	/* Trying to find a name that is not already in used */
 	uint16_t n=0;
-	while(n<9999 && os_ChkFindSym(TI_APPVAR_TYPE, varstorage_name, NULL, NULL)) {
+	while(n<9999 && os_ChkFindSym(OS_TYPE_APPVAR, varstorage_name, NULL, NULL)) {
 		n++;
 		varstorage_name[7] = (n%10)+'0';
 		varstorage_name[6] = (n/10)+'0';
@@ -572,7 +572,7 @@ void web_Cleanup() {
 	http_data_list_t *next_data = NULL;
 	while(cur_data) {
 		next_data = cur_data->next;
-		os_DelVarArc(TI_APPVAR_TYPE, cur_data->varname);
+		os_DelVarArc(OS_TYPE_APPVAR, cur_data->varname);
 		free(cur_data);
 		cur_data = next_data;
 	}
