@@ -12,7 +12,7 @@ So we're going to have to install it in our toolchain by ourselves. Be assured t
 This can't be simpler :
  * Put `usbdrvce.h` in the include folder of your toolchain (frequently `CEdev/include`).
  * Put `usbdrvce.lib` in the `lib/libload` folder of your toolchain.
- * Install the common Lib C on your calculator (clibg.8xg is available on Ti-Planet, Cemetech and probably on the Github page of the toolchain).
+ * Install the common Lib C on your calculator. The v10.2 ([that can be downloaded here](https://github.com/CE-Programming/libraries/releases/tag/v10.2)) is recommended.
  * Transfer `usbdrvce.8xv` on you calc.
  
 That's it! EZ, nah?
