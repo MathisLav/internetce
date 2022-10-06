@@ -2,6 +2,9 @@
 
 This is a high-level library for interfacing with the internet on Ti-84+CE and Ti-83 Premium CE.
 
+For more detailed information, I highly recommend you to visit the Ti-Planet page of the project : https://tiplanet.org/forum/viewtopic.php?f=12&t=24140
+Yes it is in french, but you can use Google Translate to roughly understand how to use the library (especially how to install the usbdvrce library that is not included in the toolchain yet).
+
 ## Getting started
   * Plug the calculator to a RNDIS device (basically your phone). To this end, you may need to buy an adapter. The "final cable" you need is something that has a male mini USB Type A at one end (for the calculator) and a male micro USB or USB Type C at the other end (for your phone). You can use for example :
 	* The charger of your phone (USB <-> Micro USB or USB Type C) (you may already have this).
