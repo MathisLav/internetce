@@ -1,4 +1,4 @@
-//#define DEBUG
+#define DEBUG
 
 #ifndef DEBUG
 #define debug(...)
@@ -1226,10 +1226,20 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 		unsigned int x, y;
 		os_GetCursorPos(&x, &y);
 		os_SetCursorPos(0, 0);
-		sprintf(tmp, "%d", nbdebug++);
+		nbdebug++;
+		for(int i=0; i<300; i++)
+			sprintf(tmp, "%d", nbdebug);
 		os_PutStrFull(tmp);
+		os_PutStrFull(" :: ");
+		disp(event);
 		os_SetCursorPos(x, y);
 	#endif // DEBUG
+	if(event == 0x02 || event == 0x04) {
+		boot_NewLine();
+		char test[30];
+		sprintf(test, "Enabling %d", nbdebug);
+		os_PutStrFull(test);
+	}
 	if(netinfo.configuring && event == USB_DEVICE_CONNECTED_EVENT)
 	{
 		const rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
@@ -1240,21 +1250,30 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 		size_t len = 0;
 		uint8_t cur_interface = 0; /* b0 -> wc, b1 -> cdc */
 		uint8_t i;
+		os_PutStrFull("Connected event");
 
 		if(!netinfo.connected)
 			usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
 		netinfo.device = (usb_device_t)event_data;
 		netinfo.connected = true;
 		usb_ResetDevice(netinfo.device);
+		os_PutStrFull("Reseted");
 		while(!netinfo.enabled)
 			usb_WaitForEvents();
 
 		/*********** Configuration USB ***********/
 		usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 512, &len);
-		if(!len)
+		os_PutStrFull("Got descriptor");
+		if(!len) {
+			os_PutStrFull("well no...");
 			return USB_ERROR_FAILED;
+		}
+		os_PutStrFull("oh yeah");
+
 		i = 0;
+		boot_NewLine();
 		while(i<len) {
+			os_PutStrFull(".");
 			if(*(buffer+i+1)==USB_INTERFACE_DESCRIPTOR) {
 				if(*(buffer+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(buffer+i+6)==RNDIS_SUBCLASS && *(buffer+i+7)==RNDIS_PROTOCOL) {
 					cur_interface = 1; /* wireless controller */
@@ -1272,14 +1291,20 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 			}
 			i += *(buffer+i);
 		}
+		os_PutStrFull("Desc fetched");
+		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS) {
+			os_PutStrFull("no pb");
+			return USB_ERROR_FAILED;
+		}
 		if(!netinfo.ep_wc || !netinfo.ep_cdc) {
+			os_PutStrFull("But not a wireless ctrlr");
 			netinfo.connected = false;
 			return USB_IGNORE;
 		}
-		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
-			return USB_ERROR_FAILED;
+		os_PutStrFull("oh...");
 
 		netinfo.configuring = false; /* Preventing from calling the callback twice */
+		os_PutStrFull("OK (RDNIS)");
 		/************** Configuration RNDIS ************/
 		/* Init Out */
 		memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
