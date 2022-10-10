@@ -20,6 +20,10 @@
 #ifdef DEBUG
 void debug(const void *addr, size_t len);
 void disp(unsigned int val);
+void dispAt(unsigned int x, unsigned int y, unsigned int val);
+void change(unsigned int x, unsigned int y);
+void restore();
+void pause(unsigned int iter);
 #endif // DEBUG
 
 
@@ -753,6 +757,8 @@ static usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, 
 						IP_ADDR = dhcp_msg->yiaddr;
 						memcpy(netinfo.router_MAC_addr, src_mac_addr, 6);
 						phase = 3;
+						disp(IP_ADDR);
+						pause(10000);
 					} else if(*(cur_opt+2) == 6) { /* NACK */
 						if(dhcp_last_queued_msg) {
 							web_popMessage(dhcp_last_queued_msg);
@@ -954,7 +960,7 @@ msg_queue_t *web_PushRNDISPacket(uint8_t *data, size_t length) {
 	pckt[13] = length/256;
 	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
 
-	return web_pushMessage(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), packets_callback, NULL);
+	return web_pushMessage(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, /*netinfo.ep_cdc*/15), packets_callback, NULL);
 }
 
 usb_error_t web_SendRNDISPacket(uint8_t *data, size_t length) {
@@ -968,7 +974,7 @@ usb_error_t web_SendRNDISPacket(uint8_t *data, size_t length) {
 	pckt[13] = length/256;
 	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
 
-	return usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), pckt, length+sizeof(rndis_packet_msg_t), send_rndis_callback, pckt);
+	return usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, /*netinfo.ep_cdc*/15), pckt, length+sizeof(rndis_packet_msg_t), send_rndis_callback, pckt);
 }
 
 static usb_error_t send_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data) {
@@ -987,9 +993,10 @@ void web_Init() {
 	netinfo.connected = false;
 	netinfo.configuring = true;
 	netinfo.device = NULL;
+	netinfo.rebootNeeded = false;
 	usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
-	while(!netinfo.device)
-		usb_WaitForEvents();
+	// while(!netinfo.device)
+	// 	usb_WaitForEvents();
 
 	memset(&(netinfo.router_MAC_addr), 0xFF, 6);
 	srand(rtc_Time());
@@ -1032,7 +1039,7 @@ uint32_t web_getMyIPAddr() {
 }
 
 bool web_Connected() {
-	return netinfo.connected && netinfo.enabled && netinfo.ep_wc && netinfo.ep_cdc && IP_ADDR;
+	return netinfo.enabled && netinfo.ep_wc && netinfo.ep_cdc && IP_ADDR;
 }
 
 usb_error_t web_WaitForEvents() {
@@ -1041,11 +1048,27 @@ usb_error_t web_WaitForEvents() {
 	uint8_t *fetched = msg;
 	const uint32_t beg_time = rtc_Time();
 	usb_error_t err;
-	
-	if(!netinfo.connected)
-		return usb_HandleEvents();
 
-	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
+	if(netinfo.rebootNeeded) {
+		netinfo.rebootNeeded = false;
+		usb_Cleanup();
+		usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
+		usb_HandleEvents();
+		return USB_SUCCESS;
+	}
+	
+	if(!netinfo.enabled || !netinfo.ep_wc || !netinfo.ep_cdc) {
+		change(1, 15);
+		os_PutStrFull("in ");
+		restore();
+		usb_HandleEvents();
+		change(1, 15);
+		os_PutStrFull("out");
+		restore();
+		return 0;
+	}
+
+	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, /*(netinfo.ep_cdc)|0x80*/0x8e), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
 	if(err != USB_SUCCESS)
 		return err;
 
@@ -1218,29 +1241,27 @@ static usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status
 	return ret_err;
 }
 
+
+/*
+
+	C'est prouvé : je suis coincé dans le usb_handleevents de web_waitforevents.
+	Meeeeeh, jsuis censé faire quoi ?
+
+*/
+
 static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t *data) {
 	(void)data; /* Unused parameter */
 	#ifdef DEBUG
 		static int nbdebug = 0;
 		char tmp[30];
-		unsigned int x, y;
-		os_GetCursorPos(&x, &y);
-		os_SetCursorPos(0, 0);
-		nbdebug++;
-		for(int i=0; i<300; i++)
-			sprintf(tmp, "%d", nbdebug);
+		change(0, 0);
+		sprintf(tmp, "%d", nbdebug++);
 		os_PutStrFull(tmp);
 		os_PutStrFull(" :: ");
 		disp(event);
-		os_SetCursorPos(x, y);
+		restore();
 	#endif // DEBUG
-	if(event == 0x02 || event == 0x04) {
-		boot_NewLine();
-		char test[30];
-		sprintf(test, "Enabling %d", nbdebug);
-		os_PutStrFull(test);
-	}
-	if(netinfo.configuring && event == USB_DEVICE_CONNECTED_EVENT)
+	if(/*netinfo.configuring &&*/ event == USB_DEVICE_CONNECTED_EVENT)
 	{
 		const rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
 		const rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
@@ -1250,35 +1271,37 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 		size_t len = 0;
 		uint8_t cur_interface = 0; /* b0 -> wc, b1 -> cdc */
 		uint8_t i;
-		os_PutStrFull("Connected event");
+		uint32_t max_delay;
+		os_PutStrFull("Connected ");
 
-		if(!netinfo.connected)
-			usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
 		netinfo.device = (usb_device_t)event_data;
 		netinfo.connected = true;
 		usb_ResetDevice(netinfo.device);
-		os_PutStrFull("Reseted");
-		while(!netinfo.enabled)
-			usb_WaitForEvents();
+		max_delay = rtc_Time() + TIMEOUT;
+		while(!netinfo.enabled && rtc_Time() < max_delay)
+	        usb_HandleEvents();
+
+	    if(!netinfo.enabled) {
+		    netinfo.rebootNeeded = true;
+		    os_PutStrFull("Retry ");
+		    return USB_IGNORE;
+	    }
 
 		/*********** Configuration USB ***********/
 		usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 512, &len);
-		os_PutStrFull("Got descriptor");
-		if(!len) {
-			os_PutStrFull("well no...");
+		if(!len)
 			return USB_ERROR_FAILED;
-		}
-		os_PutStrFull("oh yeah");
 
 		i = 0;
-		boot_NewLine();
 		while(i<len) {
 			os_PutStrFull(".");
 			if(*(buffer+i+1)==USB_INTERFACE_DESCRIPTOR) {
 				if(*(buffer+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(buffer+i+6)==RNDIS_SUBCLASS && *(buffer+i+7)==RNDIS_PROTOCOL) {
+					os_PutStrFull("#RNDIS#");
 					cur_interface = 1; /* wireless controller */
 					netinfo.int_wc = *(buffer+i+2);
 				} else if(*(buffer+i+5)==USB_CDC_DATA_CLASS && *(buffer+i+6)==0x00 && *(buffer+i+7)==0x00) {
+					os_PutStrFull("#CDC#");
 					cur_interface = 2; /* cdc interface */
 					netinfo.int_cdc = *(buffer+i+2);
 				} else
@@ -1291,16 +1314,17 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 			}
 			i += *(buffer+i);
 		}
-		os_PutStrFull("Desc fetched");
-		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS) {
-			os_PutStrFull("no pb");
-			return USB_ERROR_FAILED;
-		}
+		os_PutStrFull("Fetch ");
+		netinfo.ep_wc = 5;
 		if(!netinfo.ep_wc || !netinfo.ep_cdc) {
+			boot_NewLine();
 			os_PutStrFull("But not a wireless ctrlr");
 			netinfo.connected = false;
 			return USB_IGNORE;
 		}
+		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
+			return USB_ERROR_FAILED;
+
 		os_PutStrFull("oh...");
 
 		netinfo.configuring = false; /* Preventing from calling the callback twice */
@@ -1335,11 +1359,14 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 	}
 	else if(event == USB_DEVICE_ENABLED_EVENT) {
 		netinfo.enabled = true;
+		os_PutStrFull("Enabled ");
 	} else if(event == USB_DEVICE_DISABLED_EVENT) {
 		netinfo.enabled = false;
+		os_PutStrFull("Disabled ");
 	} else if(event == USB_DEVICE_DISCONNECTED_EVENT) {
 		netinfo.connected = false;
-		usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
+		netinfo.enabled = false;
+		netinfo.rebootNeeded = true;
 	}
 	return USB_SUCCESS;
 }
@@ -1369,5 +1396,31 @@ void disp(unsigned int val) {
 	sprintf(tmp, "DISP : %u ", value);
 	os_PutStrFull(tmp);
 	boot_NewLine();
+}
+
+void dispAt(unsigned int x, unsigned int y, unsigned int val) {
+	char tmp[20];
+	unsigned int px, py;
+	os_GetCursorPos(&px, &py);
+	os_SetCursorPos(x, y);
+	sprintf(tmp, "%d", val);
+	os_PutStrFull(tmp);
+	os_SetCursorPos(px, py);
+}
+
+unsigned int xxx, yyy;
+void change(unsigned int x, unsigned int y) {
+	os_GetCursorPos(&xxx, &yyy);
+	os_SetCursorPos(x, y);
+}
+
+void restore() {
+	os_SetCursorPos(xxx, yyy);
+}
+
+void pause(unsigned int iter) {
+	char tmp[15];
+	for(unsigned int i=0; i<iter; i++)
+		sprintf(tmp, "%u ", i);
 }
 #endif // DEBUG

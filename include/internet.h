@@ -253,6 +253,7 @@ typedef struct network_info {
 	bool connected;
 	bool enabled;
 	bool configuring;		/* Tells which endpoint is interesting (control or cdc) (see web_WaitForEvents()) */
+	bool rebootNeeded;		/* When an USB_DISCONNECTED_INTERRUPT, we have to cleanup everything at the OUTSIDE of the handler */
 	uint8_t int_cdc;
 	uint8_t int_wc;
 	uint8_t ep_cdc;

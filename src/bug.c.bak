@@ -1,0 +1,22 @@
+#include <usbdrvce.h>
+
+static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t *data) {
+	(void)data;
+	uint8_t buffer[50];
+	size_t len = 0;
+
+	if(event == USB_DEVICE_ENABLED_EVENT) {
+		usb_GetDescriptor((usb_device_t)event_data, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 50, &len);
+		usb_SetConfiguration((usb_device_t)event_data, (usb_configuration_descriptor_t*)buffer, len);
+	} else if(event == USB_DEVICE_CONNECTED_EVENT) {
+		usb_ResetDevice((usb_device_t)event_data);
+	}
+
+	return USB_SUCCESS;
+}
+
+int main(void) {
+	usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
+	while(1)
+		usb_HandleEvents();
+}
