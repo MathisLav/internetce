@@ -226,12 +226,9 @@ typedef struct network_info {
 	usb_device_t device;
 	bool connected;
 	bool enabled;
-	bool configuring;		/* Tells which endpoint is interesting (control or cdc) (see web_WaitForEvents()) */
-	bool rebootNeeded;		/* When an USB_DISCONNECTED_INTERRUPT, we have to cleanup everything at the OUTSIDE of the handler */
-	uint8_t int_cdc;
-	uint8_t int_wc;
-	uint8_t ep_cdc;
-	uint8_t ep_wc;
+	bool reboot_needed;		/* When an USB_DISCONNECTED_INTERRUPT, we have to cleanup everything at the OUTSIDE of the handler */
+	uint8_t epout_cdc;
+	uint8_t epin_cdc;
 	uint8_t router_MAC_addr[6];
 	uint32_t DHCP_IP_addr;
 	uint32_t DNS_IP_addr;
@@ -310,8 +307,12 @@ typedef struct http_exchange {
  */
 
 #define DEVICE				0x00
-#define RNDIS_SUBCLASS		0x01
-#define RNDIS_PROTOCOL		0x03
+#define BULK_EP				0b00000010
+
+#define WC_RNDIS_SUBCLASS	0x01		/**< All these 4 constants come from here:							*/
+#define WC_RNDIS_PROTOCOL	0x03		/**< https://www.usb.org/defined-class-codes 						*/
+#define MISC_RNDIS_SUBCLASS	0x04
+#define MISC_RNDIS_PROTOCOL	0x01
 
 #define RNDIS_PACKET_MSG 	0x00000001
 #define RNDIS_INIT_MSG		0x00000002
@@ -319,7 +320,7 @@ typedef struct http_exchange {
 #define RNDIS_SET_MSG		0x00000005
 #define RNDIS_SET_CMPLT		0x80000005
 
-#define SEND_EVERY			1
+#define SEND_EVERY			2
 #define TIMEOUT				7			/**< Maximum time in web_WaitForEvents() in seconds					*/
 
 #define ETH_IPV4			0x0008		/**< big endian stored												*/
@@ -639,6 +640,7 @@ static usb_error_t fetch_IPv4_packet(ipv4_packet_t *pckt, size_t length);
 static void fetch_arp_msg(eth_frame_t *ethernet_frame);
 static usb_error_t fetch_ethernet_frame(eth_frame_t *frame, size_t length);
 static usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data);
+static usb_error_t fetch_conf_descriptor();
 static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t *data);
 
 /**

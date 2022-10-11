@@ -252,12 +252,9 @@ typedef struct network_info {
 	usb_device_t device;
 	bool connected;
 	bool enabled;
-	bool configuring;		/* Tells which endpoint is interesting (control or cdc) (see web_WaitForEvents()) */
-	bool rebootNeeded;		/* When an USB_DISCONNECTED_INTERRUPT, we have to cleanup everything at the OUTSIDE of the handler */
-	uint8_t int_cdc;
-	uint8_t int_wc;
-	uint8_t ep_cdc;
-	uint8_t ep_wc;
+	bool reboot_needed;		/* When an USB_DISCONNECTED_INTERRUPT, we have to cleanup everything at the OUTSIDE of the handler */
+	uint8_t epout_cdc;
+	uint8_t epin_cdc;
 	uint8_t router_MAC_addr[6];
 	uint32_t DHCP_IP_addr;
 	uint32_t DNS_IP_addr;
@@ -280,8 +277,12 @@ typedef struct msg_queue {
  */
 
 #define DEVICE				0x00
-#define RNDIS_SUBCLASS		0x01
-#define RNDIS_PROTOCOL		0x03
+#define BULK_EP				0b00000010
+
+#define WC_RNDIS_SUBCLASS	0x01		/**< All these 4 constants come from here:							*/
+#define WC_RNDIS_PROTOCOL	0x03		/**< https://www.usb.org/defined-class-codes 						*/
+#define MISC_RNDIS_SUBCLASS	0x04
+#define MISC_RNDIS_PROTOCOL	0x01
 
 #define RNDIS_PACKET_MSG 	0x00000001
 #define RNDIS_INIT_MSG		0x00000002
