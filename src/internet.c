@@ -77,6 +77,11 @@ static port_list_t *listened_ports = NULL;
 //		-> Peut arriver après l'étape 1 comme après l'étape 2.
 //		-> Ne semble pas arriver dans les fonctions DHCP (dans les fetch ? dans la gestion des messages envoyés ? dans usbdrvce ?)
 //	- Les requêtes (au moins) POST ne fonctionnent pas (bloque puis RC).
+//
+//	- AUCUN SENS : 
+//		-> On part de web_waitForEvents qui est appelé par senddnsrequest et ça ne retourne pas à send dnsrequest......
+//		-> Aucun sens il paraitrait qu'il n'est même pas dans usbdrvce quand il bug.
+//		-> Est-ce que ce serait un pb d'imbrication des interruptions ???
 
 
 
@@ -616,14 +621,21 @@ void web_SendARPQuery(uint32_t ip) {
 
 uint32_t web_SendDNSRequest(const char *url) {
 	uint32_t res_ip = 0;
+	os_PutStrFull("/0");
 	web_ScheduleDNSRequest(url, &dns_callback, &res_ip);
-	while(!res_ip)
+	os_PutStrFull("/1");
+	while(!res_ip) {
+		os_PutStrFull("+");
 		web_WaitForEvents();
+		os_PutStrFull(";");
+	}
+	os_PutStrFull("/3");
 	return res_ip;
 }
 
 static usb_error_t dns_callback(web_port_t port, uint32_t res_ip, web_callback_data_t *user_data) {
 	(void)port;
+	os_PutStrFull("/2");
 	*((uint32_t*)user_data) = res_ip;
 	return (res_ip!=0xffffffff)*USB_ERROR_FAILED;
 }
@@ -1094,13 +1106,16 @@ usb_error_t web_WaitForEvents() {
 	if(!netinfo.enabled || !netinfo.epin_cdc)
 		return usb_HandleEvents();
 
+	os_PutStrFull("A");
 	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.epin_cdc), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
 	if(err != USB_SUCCESS)
 		return err;
 
 	while(fetched) {
-		if(beg_time + TIMEOUT <= rtc_Time())
+		if(beg_time + TIMEOUT <= rtc_Time()) {
+			os_PutStrFull("B2 ");
 			return USB_ERROR_TIMEOUT;
+		}
 		cur_msg = send_queue;
 		while(cur_msg) {
 			if(cur_msg->waitingTime <= rtc_Time()) {
@@ -1116,6 +1131,7 @@ usb_error_t web_WaitForEvents() {
 		}
 		err = usb_HandleEvents();
 	}
+	os_PutStrFull("B1 ");
 
 	return err;
 }
@@ -1279,9 +1295,7 @@ static usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status
 	usb_error_t ret_err = fetch_ethernet_frame((eth_frame_t*)(*((uint8_t**)data) + sizeof(rndis_packet_msg_t)), transferred-sizeof(rndis_packet_msg_t));
 	*((uint8_t**)data) = NULL; /* Notifying web_WaitForEvents() that we received and fetched something */
 	os_PutStrFull("# ");
-	pause(100);
-	// return ret_err;
-	return USB_SUCCESS;
+	return ret_err;
 }
 
 
