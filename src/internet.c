@@ -1,4 +1,4 @@
-//#define DEBUG
+#define DEBUG
 
 #ifndef DEBUG
 #define debug(...)
@@ -983,14 +983,10 @@ void web_Init() {
 	netinfo.int_cdc = 0;
 	netinfo.ep_wc = 0;
 	netinfo.ep_cdc = 0;
-	netinfo.enabled = false;
-	netinfo.connected = false;
+	netinfo.state = STATE_UNKNOWN;
 	netinfo.configuring = true;
 	netinfo.device = NULL;
 	usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
-	while(!netinfo.device)
-		usb_WaitForEvents();
-
 	memset(&(netinfo.router_MAC_addr), 0xFF, 6);
 	srand(rtc_Time());
 	MAC_ADDR[5] = randInt(0, 0xFF);
@@ -1032,8 +1028,10 @@ uint32_t web_getMyIPAddr() {
 }
 
 bool web_Connected() {
-	return netinfo.connected && netinfo.enabled && netinfo.ep_wc && netinfo.ep_cdc && IP_ADDR;
+	return netinfo.state == STATE_NETWORK_CONFIGURED;
 }
+
+static usb_error_t configure_rndis();
 
 usb_error_t web_WaitForEvents() {
 	msg_queue_t *cur_msg = send_queue;
@@ -1042,7 +1040,14 @@ usb_error_t web_WaitForEvents() {
 	const uint32_t beg_time = rtc_Time();
 	usb_error_t err;
 	
-	if(!netinfo.connected)
+	if(netinfo.state == STATE_USB_ENABLED) {
+		netinfo.state = STATE_DHCP_CONFIGURING;
+		usb_HandleEvents();
+		configure_rndis();
+		dhcp_init();
+	}
+
+	if(netinfo.state <= STATE_USB_ENABLED)
 		return usb_HandleEvents();
 
 	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
@@ -1127,6 +1132,81 @@ void web_popMessage(msg_queue_t *msg) {
 	free(msg);
 }
 
+
+static usb_error_t configure_rndis() {
+	const rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
+	const rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
+	const usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
+	const usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 0x0400};
+	uint8_t buffer[512] = {0};
+	size_t len = 0;
+	uint8_t cur_interface = 0; /* b0 -> wc, b1 -> cdc */
+	uint8_t i;
+
+
+	/*********** Configuration USB ***********/
+	usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 512, &len);
+	os_ClrHome();
+	boot_NewLine();
+	disp(len);
+	debug(buffer, 8*8);
+	if(!len)
+		return USB_ERROR_FAILED;
+	i = 0;
+	while(i<len) {
+		if(*(buffer+i+1)==USB_INTERFACE_DESCRIPTOR) {
+			if(*(buffer+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(buffer+i+6)==RNDIS_SUBCLASS && *(buffer+i+7)==RNDIS_PROTOCOL) {
+				cur_interface = 1; /* wireless controller */
+				netinfo.int_wc = *(buffer+i+2);
+			} else if(*(buffer+i+5)==USB_CDC_DATA_CLASS && *(buffer+i+6)==0x00 && *(buffer+i+7)==0x00) {
+				cur_interface = 2; /* cdc interface */
+				netinfo.int_cdc = *(buffer+i+2);
+			} else
+				cur_interface = 0;
+		} else if(*(buffer+i+1)==USB_ENDPOINT_DESCRIPTOR) {
+			if(cur_interface == 1)
+				netinfo.ep_wc = *(buffer+i+2) & 0x7F;
+			else if(cur_interface == 2)
+				netinfo.ep_cdc = *(buffer+i+2) & 0x7F;
+		}
+		i += *(buffer+i);
+	}
+	if(!netinfo.ep_wc || !netinfo.ep_cdc) {
+		netinfo.state = STATE_UNKNOWN;
+		return USB_IGNORE;
+	}
+	if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
+		return USB_ERROR_FAILED;
+
+	netinfo.configuring = false; /* Preventing from calling the callback twice */
+	/************** Configuration RNDIS ************/
+	/* Init Out */
+	memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
+	buffer[6] = 24; /* wLength */
+	memcpy(buffer+sizeof(usb_control_setup_t), &rndis_initmsg, sizeof(rndis_init_msg_t));
+	do {
+		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+	} while(len == 0);
+
+	memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
+	do {
+		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+	} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_INIT_CMPLT);
+
+	memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
+	buffer[6] = 32; /* wLength */
+	memcpy(buffer+sizeof(usb_control_setup_t), &rndis_setpcktflt, sizeof(rndis_setpcktflt));
+	do {
+		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+	} while(len == 0);
+
+	memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
+	do {
+		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
+	} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_SET_CMPLT);
+
+	return USB_SUCCESS;
+}
 
 static usb_error_t call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port) {
 	port_list_t *cur_listenedPort = listened_ports;
@@ -1232,91 +1312,34 @@ static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_
 	#endif // DEBUG
 	if(netinfo.configuring && event == USB_DEVICE_CONNECTED_EVENT)
 	{
-		const rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
-		const rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
-		const usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
-		const usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 0x0400};
-		uint8_t buffer[512];
-		size_t len = 0;
-		uint8_t cur_interface = 0; /* b0 -> wc, b1 -> cdc */
-		uint8_t i;
-
-		if(!netinfo.connected)
-			usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
+		boot_NewLine();
+		os_PutStrFull("CONNECTED");
+		boot_NewLine();
 		netinfo.device = (usb_device_t)event_data;
-		netinfo.connected = true;
-		usb_ResetDevice(netinfo.device);
-		while(!netinfo.enabled)
-			usb_WaitForEvents();
-
-		/*********** Configuration USB ***********/
-		usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 512, &len);
-		if(!len)
-			return USB_ERROR_FAILED;
-		i = 0;
-		while(i<len) {
-			if(*(buffer+i+1)==USB_INTERFACE_DESCRIPTOR) {
-				if(*(buffer+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(buffer+i+6)==RNDIS_SUBCLASS && *(buffer+i+7)==RNDIS_PROTOCOL) {
-					cur_interface = 1; /* wireless controller */
-					netinfo.int_wc = *(buffer+i+2);
-				} else if(*(buffer+i+5)==USB_CDC_DATA_CLASS && *(buffer+i+6)==0x00 && *(buffer+i+7)==0x00) {
-					cur_interface = 2; /* cdc interface */
-					netinfo.int_cdc = *(buffer+i+2);
-				} else
-					cur_interface = 0;
-			} else if(*(buffer+i+1)==USB_ENDPOINT_DESCRIPTOR) {
-				if(cur_interface == 1)
-					netinfo.ep_wc = *(buffer+i+2) & 0x7F;
-				else if(cur_interface == 2)
-					netinfo.ep_cdc = *(buffer+i+2) & 0x7F;
-			}
-			i += *(buffer+i);
-		}
-		if(!netinfo.ep_wc || !netinfo.ep_cdc) {
-			netinfo.connected = false;
-			return USB_IGNORE;
-		}
-		if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
-			return USB_ERROR_FAILED;
-
-		netinfo.configuring = false; /* Preventing from calling the callback twice */
-		/************** Configuration RNDIS ************/
-		/* Init Out */
-		memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
-		buffer[6] = 24; /* wLength */
-		memcpy(buffer+sizeof(usb_control_setup_t), &rndis_initmsg, sizeof(rndis_init_msg_t));
-		do {
-			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-		} while(len == 0);
-
-		memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
-		do {
-			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-		} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_INIT_CMPLT);
-
-		memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
-		buffer[6] = 32; /* wLength */
-		memcpy(buffer+sizeof(usb_control_setup_t), &rndis_setpcktflt, sizeof(rndis_setpcktflt));
-		do {
-			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-		} while(len == 0);
-
-		memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
-		do {
-			usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-		} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_SET_CMPLT);
-		
-		dhcp_init();
+		netinfo.state = STATE_USB_CONNECTED;
+		// usb_ResetDevice(netinfo.device);
+		os_PutStrFull("RESETED");
+		boot_NewLine();
 	}
 	else if(event == USB_DEVICE_ENABLED_EVENT) {
-		netinfo.enabled = true;
+		os_PutStrFull("ENABLED");
+		boot_NewLine();
+		netinfo.state = STATE_USB_ENABLED;
 	} else if(event == USB_DEVICE_DISABLED_EVENT) {
-		netinfo.enabled = false;
+		os_PutStrFull("DISABLED");
+		boot_NewLine();
+		netinfo.state = STATE_UNKNOWN;
 	} else if(event == USB_DEVICE_DISCONNECTED_EVENT) {
-		netinfo.connected = false;
+		usb_Cleanup();
 		usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
+		netinfo.state = STATE_UNKNOWN;
+		os_PutStrFull("DISCONNECTED");
+		boot_NewLine();
 	}
 	return USB_SUCCESS;
+
+
+	// le problème situe au niveau de la déco, que l'on déco la calc à la main ou que ce soit via activation du partage de co usb, la déco RC
 }
 
 

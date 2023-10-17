@@ -33,6 +33,19 @@ typedef enum http_status {
 	HTTP_STATUS_SERVICE_UNAVAILABLE = 503
 } http_status_t;
 
+/**
+ * @enum device_state_t
+ * A list of the different states of the device
+ */
+typedef enum device_state {
+	STATE_UNKNOWN,
+	STATE_USB_CONNECTED,
+	STATE_USB_ENABLED,
+	STATE_RNDIS_CONFIGURING,
+	STATE_DHCP_CONFIGURING,
+	STATE_NETWORK_CONFIGURED
+} device_state_t;
+
 
 /**
  * A pointer to web_callback_data_t is passed in the different
@@ -224,8 +237,7 @@ typedef struct tcp_segment {
 
 typedef struct network_info {
 	usb_device_t device;
-	bool connected;
-	bool enabled;
+	device_state_t state;
 	bool configuring;		/* Tells which endpoint is interesting (control or cdc) (see web_WaitForEvents()) */
 	uint8_t int_cdc;
 	uint8_t int_wc;
