@@ -43,7 +43,8 @@ typedef enum device_state {
 	STATE_USB_ENABLED,
 	STATE_RNDIS_CONFIGURING,
 	STATE_DHCP_CONFIGURING,
-	STATE_NETWORK_CONFIGURED
+	STATE_NETWORK_CONFIGURED,
+	STATE_USB_LOST
 } device_state_t;
 
 
@@ -94,6 +95,10 @@ typedef usb_error_t (web_dns_callback_t)(web_port_t port, uint32_t res_ip,
  * The next structs are descriptions of web protocol headers such as IP or HTTP.  
  */
 
+/**
+ * RNDIS messages
+ */
+
 typedef struct rndis_msg {
 	uint32_t MessageType;
 	uint32_t MessageLength;
@@ -135,6 +140,11 @@ typedef struct rndis_packet_msg {
 	uint32_t Reserved;			/**< Must be 0										*/
 	uint8_t data[];
 } rndis_packet_msg_t;
+
+
+/**
+ * Network packets
+ */
 
 typedef struct eth_frame {
 	uint8_t MAC_dst[6];
@@ -238,11 +248,9 @@ typedef struct tcp_segment {
 typedef struct network_info {
 	usb_device_t device;
 	device_state_t state;
-	bool configuring;		/* Tells which endpoint is interesting (control or cdc) (see web_WaitForEvents()) */
-	uint8_t int_cdc;
-	uint8_t int_wc;
-	uint8_t ep_cdc;
-	uint8_t ep_wc;
+	uint8_t ep_cdc_in;
+	uint8_t ep_cdc_out;
+	uint8_t ep_wc_in;
 	uint8_t router_MAC_addr[6];
 	uint32_t DHCP_IP_addr;
 	uint32_t DNS_IP_addr;
@@ -321,8 +329,10 @@ typedef struct http_exchange {
  */
 
 #define DEVICE				0x00
-#define RNDIS_SUBCLASS		0x01
-#define RNDIS_PROTOCOL		0x03
+#define WIRELESS_RNDIS_SUBCLASS		0x01
+#define WIRELESS_RNDIS_PROTOCOL		0x03
+#define MISC_RNDIS_SUBCLASS	0x04
+#define MISC_RNDIS_PROTOCOL	0x01
 
 #define RNDIS_PACKET_MSG 	0x00000001
 #define RNDIS_INIT_MSG		0x00000002
@@ -349,7 +359,7 @@ typedef struct http_exchange {
 #define HTTP_PORT			80
 #define HTTPS_PORT			443
 
-#define MAX_SEGMENT_SIZE	536			/**< Minimum MSS (the calculator does not handle ipv4 fragments)	*/
+#define MAX_SEGMENT_SIZE	1500			/**< Minimum MSS (the calculator does not handle ipv4 fragments)	*/
 #define TCP_WINDOW_SIZE		MAX_SEGMENT_SIZE*7 /**< Considering the calculator is pretty slow				*/
 
 #define FLAG_TCP_NONE		0
@@ -642,6 +652,7 @@ static usb_error_t send_rndis_callback(usb_endpoint_t endpoint, usb_transfer_sta
 static size_t getChunkSize(const char **ascii);
 static bool cmpbroadcast(const uint8_t *mac_addr);
 static uint32_t getBigEndianValue(uint8_t *beVal);
+static usb_error_t configure_usb_device();
 static usb_error_t call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port);
 static usb_error_t fetch_tcp_segment(tcp_segment_t *seg, size_t length, uint32_t ip_src, uint32_t ip_dst);
 static usb_error_t fetch_udp_datagram(udp_datagram_t *datagram, size_t length, uint32_t ip_src, uint32_t ip_dst);

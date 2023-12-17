@@ -59,6 +59,20 @@ typedef enum http_status {
 	HTTP_STATUS_SERVICE_UNAVAILABLE = 503
 } http_status_t;
 
+/**
+ * @enum device_state_t
+ * A list of the different states of the device
+ */
+typedef enum device_state {
+	STATE_UNKNOWN,
+	STATE_USB_CONNECTED,
+	STATE_USB_ENABLED,
+	STATE_RNDIS_CONFIGURING,
+	STATE_DHCP_CONFIGURING,
+	STATE_NETWORK_CONFIGURED,
+	STATE_USB_LOST
+} device_state_t;
+
 
 /**
  * A pointer to web_callback_data_t is passed in the different
@@ -250,13 +264,10 @@ typedef struct tcp_segment {
 
 typedef struct network_info {
 	usb_device_t device;
-	bool connected;
-	bool enabled;
-	bool configuring;		/* Tells which endpoint is interesting (control or cdc) (see web_WaitForEvents()) */
-	uint8_t int_cdc;
-	uint8_t int_wc;
-	uint8_t ep_cdc;
-	uint8_t ep_wc;
+	device_state_t state;
+	uint8_t ep_cdc_in;
+	uint8_t ep_cdc_out;
+	uint8_t ep_wc_in;
 	uint8_t router_MAC_addr[6];
 	uint32_t DHCP_IP_addr;
 	uint32_t DNS_IP_addr;
@@ -279,8 +290,10 @@ typedef struct msg_queue {
  */
 
 #define DEVICE				0x00
-#define RNDIS_SUBCLASS		0x01
-#define RNDIS_PROTOCOL		0x03
+#define WIRELESS_RNDIS_SUBCLASS		0x01
+#define WIRELESS_RNDIS_PROTOCOL		0x03
+#define MISC_RNDIS_SUBCLASS	0x04
+#define MISC_RNDIS_PROTOCOL	0x01
 
 #define RNDIS_PACKET_MSG 	0x00000001
 #define RNDIS_INIT_MSG		0x00000002
@@ -307,7 +320,7 @@ typedef struct msg_queue {
 #define HTTP_PORT			80
 #define HTTPS_PORT			443
 
-#define MAX_SEGMENT_SIZE	536			/**< Minimum MSS (the calculator does not handle ipv4 fragments)	*/
+#define MAX_SEGMENT_SIZE	1500			/**< Minimum MSS (the calculator does not handle ipv4 fragments)	*/
 #define TCP_WINDOW_SIZE		MAX_SEGMENT_SIZE*7 /**< Considering the calculator is pretty slow				*/
 
 #define FLAG_TCP_NONE		0

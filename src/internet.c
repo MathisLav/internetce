@@ -1,8 +1,10 @@
-#define DEBUG
+// #define DEBUG
 
 #ifndef DEBUG
 #define debug(...)
 #define disp(...)
+#define pause(...)
+#define printf_xy(...)
 #endif
 
 #include "../include/internetstatic.h"
@@ -20,6 +22,8 @@
 #ifdef DEBUG
 void debug(const void *addr, size_t len);
 void disp(unsigned int val);
+void printf_xy(unsigned int xpos, unsigned int ypos, const char *txt);
+#define pause() while(!os_GetCSC()) {}
 #endif // DEBUG
 
 
@@ -33,6 +37,7 @@ static uint8_t *src_mac_addr; /* For dhcp purposes (we need to acknowledge the r
 static http_data_list_t *http_data_list = NULL;
 static msg_queue_t *send_queue = NULL;
 static port_list_t *listened_ports = NULL;
+static uint8_t msg_buffer[MAX_SEGMENT_SIZE+100];
 
 
 
@@ -599,6 +604,7 @@ uint32_t web_SendDNSRequest(const char *url) {
 	web_ScheduleDNSRequest(url, &dns_callback, &res_ip);
 	while(!res_ip)
 		web_WaitForEvents();
+	web_UnlistenPort(DNS_PORT);
 	return res_ip;
 }
 
@@ -700,8 +706,7 @@ static void dhcp_init() {
 	if(phase != 0) /* if an init() is already running */
 		return;
 
-	web_ListenPort(0x44, fetch_dhcp_msg, NULL);
-
+	web_ListenPort(CLIENT_DHCP_PORT, fetch_dhcp_msg, NULL);
 	const uint8_t beg_header[] = {0x01, 0x01, 0x06, 0x00};
 	const uint8_t options_disc[] = {53, 1, 1, 0x37, 3, 1, 3, 6, 0xFF, 0};
 	const size_t length_disc = sizeof(dhcp_message_t)+sizeof(options_disc);
@@ -753,12 +758,15 @@ static usb_error_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, 
 						IP_ADDR = dhcp_msg->yiaddr;
 						memcpy(netinfo.router_MAC_addr, src_mac_addr, 6);
 						phase = 3;
+						netinfo.state = STATE_NETWORK_CONFIGURED;
+						/* TODO: unlisten DHCP port? Or keep listening it for possible information packets? */
 					} else if(*(cur_opt+2) == 6) { /* NACK */
 						if(dhcp_last_queued_msg) {
 							web_popMessage(dhcp_last_queued_msg);
 							dhcp_last_queued_msg = NULL;
 						}
 						phase = 0;
+						web_UnlistenPort(CLIENT_DHCP_PORT);
 						dhcp_init();
 						return USB_ERROR_FAILED;
 					}
@@ -840,13 +848,15 @@ static uint16_t transport_checksum(uint8_t *data, size_t length, uint32_t ip_src
 
 
 msg_queue_t *web_PushUDPDatagram(uint8_t *data, size_t length, uint32_t ip_dst, web_port_t port_src, web_port_t port_dst) {
-	uint8_t *datagram = calloc(length+sizeof(udp_datagram_t), 1);
+	uint8_t *datagram = malloc(length+sizeof(udp_datagram_t));
 	datagram[0] = port_src/256;
 	datagram[1] = port_src%256;
 	datagram[2] = port_dst/256;
 	datagram[3] = port_dst%256;
 	datagram[4] = (length+sizeof(udp_datagram_t))/256;
 	datagram[5] = (length+sizeof(udp_datagram_t))%256;
+	datagram[6] = 0;
+	datagram[7] = 0;
 	memcpy(datagram+sizeof(udp_datagram_t), data, length);
 	uint16_t chksm = transport_checksum(datagram, length+sizeof(udp_datagram_t), IP_ADDR, ip_dst, UDP_PROTOCOL);
 	datagram[6] = chksm/256;
@@ -862,7 +872,7 @@ msg_queue_t *web_PushUDPDatagram(uint8_t *data, size_t length, uint32_t ip_dst, 
 msg_queue_t *web_PushIPv4Packet(uint8_t *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
 	static uint16_t nbpacket = 0;
 	const size_t size = length+sizeof(ipv4_packet_t);
-	const ipv4_packet_t packet = {0x45, 0x10, 0, 0, 0x40, 0x80, 0, 0, 0, 0};
+	const ipv4_packet_t packet = {0x45, 0, 0, 0, 0x40, 0x80, 0, 0, 0, 0};
 	uint8_t *ipv4_pckt = malloc(size);
 	memcpy(ipv4_pckt, &packet, sizeof(ipv4_packet_t));
 	ipv4_pckt[2] = size/256;
@@ -954,7 +964,7 @@ msg_queue_t *web_PushRNDISPacket(uint8_t *data, size_t length) {
 	pckt[13] = length/256;
 	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
 
-	return web_pushMessage(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), packets_callback, NULL);
+	return web_pushMessage(pckt, length+sizeof(rndis_packet_msg_t), usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_out), packets_callback, NULL);
 }
 
 usb_error_t web_SendRNDISPacket(uint8_t *data, size_t length) {
@@ -968,7 +978,7 @@ usb_error_t web_SendRNDISPacket(uint8_t *data, size_t length) {
 	pckt[13] = length/256;
 	memcpy(pckt+sizeof(rndis_packet_msg_t), data, length);
 
-	return usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc), pckt, length+sizeof(rndis_packet_msg_t), send_rndis_callback, pckt);
+	return usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_out), pckt, length+sizeof(rndis_packet_msg_t), send_rndis_callback, pckt);
 }
 
 static usb_error_t send_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred, usb_transfer_data_t *data) {
@@ -979,12 +989,10 @@ static usb_error_t send_rndis_callback(usb_endpoint_t endpoint, usb_transfer_sta
 
 
 void web_Init() {
-	netinfo.int_wc = 0;
-	netinfo.int_cdc = 0;
-	netinfo.ep_wc = 0;
-	netinfo.ep_cdc = 0;
+	netinfo.ep_wc_in = 0;
+	netinfo.ep_cdc_in = 0;
+	netinfo.ep_cdc_out = 0;
 	netinfo.state = STATE_UNKNOWN;
-	netinfo.configuring = true;
 	netinfo.device = NULL;
 	usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
 	memset(&(netinfo.router_MAC_addr), 0xFF, 6);
@@ -1031,26 +1039,31 @@ bool web_Connected() {
 	return netinfo.state == STATE_NETWORK_CONFIGURED;
 }
 
-static usb_error_t configure_rndis();
-
 usb_error_t web_WaitForEvents() {
 	msg_queue_t *cur_msg = send_queue;
-	uint8_t msg[MAX_SEGMENT_SIZE+100];
-	uint8_t *fetched = msg;
+	uint8_t *fetched = msg_buffer;
 	const uint32_t beg_time = rtc_Time();
 	usb_error_t err;
+
+	if(netinfo.state == STATE_USB_LOST) {
+		web_Cleanup();
+		web_Init();
+	}
 	
 	if(netinfo.state == STATE_USB_ENABLED) {
-		netinfo.state = STATE_DHCP_CONFIGURING;
-		usb_HandleEvents();
-		configure_rndis();
-		dhcp_init();
+		if(configure_usb_device() == USB_SUCCESS) {
+			netinfo.state = STATE_DHCP_CONFIGURING;
+			dhcp_init();
+		} else {
+			netinfo.state = STATE_UNKNOWN;
+		}
 	}
 
-	if(netinfo.state <= STATE_USB_ENABLED)
+	if(netinfo.state <= STATE_USB_ENABLED) {
 		return usb_HandleEvents();
+	}
 
-	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, (netinfo.ep_cdc)|0x80), msg, MAX_SEGMENT_SIZE+100, packets_callback, &fetched);
+	err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_in), msg_buffer, MAX_SEGMENT_SIZE + 100, packets_callback, &fetched);
 	if(err != USB_SUCCESS)
 		return err;
 
@@ -1132,78 +1145,105 @@ void web_popMessage(msg_queue_t *msg) {
 	free(msg);
 }
 
-
-static usb_error_t configure_rndis() {
-	const rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
-	const rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
-	const usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
-	const usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 0x0400};
-	uint8_t buffer[512] = {0};
+static usb_error_t configure_usb_device() {
+	rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, 0x0400};
+	rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
+	usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
+	usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 256};
+	uint8_t buffer[256] = {0};  /* Allocating 256 bytes for the messages buffer, should be enough */
 	size_t len = 0;
-	uint8_t cur_interface = 0; /* b0 -> wc, b1 -> cdc */
-	uint8_t i;
+	size_t total_length;
+	bool is_wireless_int = false, is_cdc_int = false;
+	uint8_t i = 0;
 
-
-	/*********** Configuration USB ***********/
-	usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 512, &len);
-	os_ClrHome();
-	boot_NewLine();
-	disp(len);
-	debug(buffer, 8*8);
-	if(!len)
+	/* First, let's retrieve the configuration descriptor total size */
+	usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 9, &len);
+	if(len != 9)
 		return USB_ERROR_FAILED;
-	i = 0;
-	while(i<len) {
-		if(*(buffer+i+1)==USB_INTERFACE_DESCRIPTOR) {
-			if(*(buffer+i+5)==USB_WIRELESS_CONTROLLER_CLASS && *(buffer+i+6)==RNDIS_SUBCLASS && *(buffer+i+7)==RNDIS_PROTOCOL) {
-				cur_interface = 1; /* wireless controller */
-				netinfo.int_wc = *(buffer+i+2);
-			} else if(*(buffer+i+5)==USB_CDC_DATA_CLASS && *(buffer+i+6)==0x00 && *(buffer+i+7)==0x00) {
-				cur_interface = 2; /* cdc interface */
-				netinfo.int_cdc = *(buffer+i+2);
-			} else
-				cur_interface = 0;
-		} else if(*(buffer+i+1)==USB_ENDPOINT_DESCRIPTOR) {
-			if(cur_interface == 1)
-				netinfo.ep_wc = *(buffer+i+2) & 0x7F;
-			else if(cur_interface == 2)
-				netinfo.ep_cdc = *(buffer+i+2) & 0x7F;
+	total_length = ((usb_configuration_descriptor_t*)buffer)->wTotalLength;  /* More or less 40 bytes */
+	if(total_length > 256)
+		return USB_ERROR_NO_MEMORY;
+
+	usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, total_length, &len);
+	if(len != total_length)
+		return USB_ERROR_FAILED;
+
+	/* Iterating through all the descriptors to see if there are an rndis and cdc interfaces */
+	while(i < len) {
+		usb_descriptor_t *usb_descr = (usb_descriptor_t*)(buffer + i);
+		switch(usb_descr->bDescriptorType) {
+			/* USB Interface Descriptor */
+			case USB_INTERFACE_DESCRIPTOR: {
+				usb_interface_descriptor_t *interface_desc = (usb_interface_descriptor_t*)usb_descr;
+				if(interface_desc->bInterfaceClass    == USB_WIRELESS_CONTROLLER_CLASS &&
+				   interface_desc->bInterfaceSubClass == WIRELESS_RNDIS_SUBCLASS &&
+				   interface_desc->bInterfaceProtocol == WIRELESS_RNDIS_PROTOCOL)
+				{
+					is_wireless_int = true;
+					is_cdc_int = false;
+				} else if(interface_desc->bInterfaceClass    == USB_MISCELLANEOUS_CLASS &&
+				   		  interface_desc->bInterfaceSubClass == MISC_RNDIS_SUBCLASS &&
+				   		  interface_desc->bInterfaceProtocol == MISC_RNDIS_PROTOCOL)
+				{
+					is_wireless_int = true;
+					is_cdc_int = false;
+				} else if(interface_desc->bInterfaceClass == USB_CDC_DATA_CLASS &&
+						  interface_desc->bInterfaceSubClass == 0x00 &&
+						  interface_desc->bInterfaceProtocol == 0x00)
+				{
+					is_wireless_int = false;
+					is_cdc_int = true;
+				} else {
+					is_wireless_int = false;
+					is_cdc_int = false;
+				}
+				break;
+			}
+			/* USB Endpoint Descriptor */
+			case USB_ENDPOINT_DESCRIPTOR: {
+				usb_endpoint_descriptor_t *endpoint_desc = (usb_endpoint_descriptor_t*)usb_descr;
+				if(is_wireless_int) {
+					netinfo.ep_wc_in = endpoint_desc->bEndpointAddress;
+				} else if(is_cdc_int && (endpoint_desc->bEndpointAddress & 0x80) != 0) {  /* IN endpoint */
+					netinfo.ep_cdc_in = endpoint_desc->bEndpointAddress;
+				} else if(is_cdc_int && (endpoint_desc->bEndpointAddress & 0x80) == 0) {  /* OUT endpoint */
+					netinfo.ep_cdc_out = endpoint_desc->bEndpointAddress;
+				}
+				break;
+			}
+			/* Unknown, Unrelevant Descriptor */
+			default:
+				break;
 		}
-		i += *(buffer+i);
+
+		i += usb_descr->bLength;
 	}
-	if(!netinfo.ep_wc || !netinfo.ep_cdc) {
+
+	/* If one is missing, ignoring the device */
+	if(netinfo.ep_wc_in == 0 || netinfo.ep_cdc_in == 0 || netinfo.ep_cdc_out == 0) {
 		netinfo.state = STATE_UNKNOWN;
+		netinfo.ep_wc_in = 0;
+		netinfo.ep_cdc_in = 0;
+		netinfo.ep_cdc_out = 0;
 		return USB_IGNORE;
 	}
+
+	/* Otherwise, let's goooo */
 	if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
 		return USB_ERROR_FAILED;
 
-	netinfo.configuring = false; /* Preventing from calling the callback twice */
 	/************** Configuration RNDIS ************/
-	/* Init Out */
-	memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
-	buffer[6] = 24; /* wLength */
-	memcpy(buffer+sizeof(usb_control_setup_t), &rndis_initmsg, sizeof(rndis_init_msg_t));
+	out_ctrl.wLength = 24;
 	do {
-		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-	} while(len == 0);
+		usb_DefaultControlTransfer(netinfo.device, &out_ctrl, &rndis_initmsg, 3, NULL);
+		usb_DefaultControlTransfer(netinfo.device, &in_ctrl, buffer, 3, &len);
+	} while(len == 0 || ((rndis_msg_t*)buffer)->MessageType != RNDIS_INIT_CMPLT);
 
-	memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
+	out_ctrl.wLength = 32;
 	do {
-		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-	} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_INIT_CMPLT);
-
-	memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
-	buffer[6] = 32; /* wLength */
-	memcpy(buffer+sizeof(usb_control_setup_t), &rndis_setpcktflt, sizeof(rndis_setpcktflt));
-	do {
-		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-	} while(len == 0);
-
-	memcpy(buffer, &in_ctrl, sizeof(usb_control_setup_t));
-	do {
-		usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, 0), buffer, 0, 3, &len);
-	} while(len == 0 || ((rndis_msg_t*)(buffer+sizeof(usb_control_setup_t)))->MessageType != RNDIS_SET_CMPLT);
+		usb_DefaultControlTransfer(netinfo.device, &out_ctrl, &rndis_setpcktflt, 3, NULL);
+		usb_DefaultControlTransfer(netinfo.device, &in_ctrl, buffer, 3, &len);
+	} while(len == 0 || ((rndis_msg_t*)buffer)->MessageType != RNDIS_SET_CMPLT);
 
 	return USB_SUCCESS;
 }
@@ -1285,8 +1325,10 @@ static usb_error_t fetch_ethernet_frame(eth_frame_t *frame, size_t length) {
 		src_mac_addr = frame->MAC_src;
 		ipv4_packet_t *ipv4_pckt = (ipv4_packet_t*)((uint8_t*)frame+sizeof(eth_frame_t)-4); /* -4=-crc */
 		return fetch_IPv4_packet(ipv4_pckt, length-sizeof(eth_frame_t)+4); /* No CRC */
-	} else if((!memcmp(frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(frame->MAC_dst)) && frame->Ethertype == ETH_ARP)
+	} else if(frame->Ethertype == ETH_ARP && (!memcmp(frame->MAC_dst, MAC_ADDR, 6) || cmpbroadcast(frame->MAC_dst))) {
 		fetch_arp_msg(frame);
+	}
+
 	return USB_IGNORE;
 }
 
@@ -1300,65 +1342,150 @@ static usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status
 
 static usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t *data) {
 	(void)data; /* Unused parameter */
+	switch(event)
+	{
+		case USB_DEVICE_CONNECTED_EVENT:
+			netinfo.device = (usb_device_t)event_data;
+			netinfo.state = STATE_USB_CONNECTED;
+			usb_ResetDevice(netinfo.device);
+			break;
+		case USB_DEVICE_ENABLED_EVENT:
+			if(!(usb_GetRole() & USB_ROLE_DEVICE)) {
+				netinfo.state = STATE_USB_ENABLED;
+			} else {
+				usb_DisableDevice(netinfo.device);
+				netinfo.state = STATE_UNKNOWN;
+			}
+			break;
+		case USB_DEVICE_DISABLED_EVENT:
+			netinfo.state = STATE_USB_LOST;
+			break;
+		case USB_DEVICE_DISCONNECTED_EVENT:
+			netinfo.state = STATE_USB_LOST;
+			break;
+		default:
+			break;
+	}
+	
 	#ifdef DEBUG
-		static int nbdebug = 0;
-		char tmp[30];
+		static const char *usb_event_names[] = {
+	        "ROLE_CHANGED_EVENT",
+	        "DEVICE_DISCONNECTED_EVENT",
+	        "DEVICE_CONNECTED_EVENT",
+	        "DEVICE_DISABLED_EVENT",
+	        "DEVICE_ENABLED_EVENT",
+	        "HUB_LOCAL_POWER_GOOD_EVENT",
+	        "HUB_LOCAL_POWER_LOST_EVENT",
+	        "DEVICE_RESUMED_EVENT",
+	        "DEVICE_SUSPENDED_EVENT",
+	        "DEVICE_OVERCURRENT_DEACTIVATED_EVENT",
+	        "DEVICE_OVERCURRENT_ACTIVATED_EVENT",
+	        "DEFAULT_SETUP_EVENT",
+	        "HOST_CONFIGURE_EVENT",
+	        // Temp debug events:
+	        "DEVICE_INT",
+	        "DEVICE_CONTROL_INT",
+	        "DEVICE_DEVICE_INT",
+	        "OTG_INT",
+	        "HOST_INT",
+	        "CONTROL_ERROR_INT",
+	        "CONTROL_ABORT_INT",
+	        "FIFO0_SHORT_PACKET_INT",
+	        "FIFO1_SHORT_PACKET_INT",
+	        "FIFO2_SHORT_PACKET_INT",
+	        "FIFO3_SHORT_PACKET_INT",
+	        "DEVICE_SUSPEND_INT",
+	        "DEVICE_RESUME_INT",
+	        "DEVICE_ISOCHRONOUS_ERROR_INT",
+	        "DEVICE_ISOCHRONOUS_ABORT_INT",
+	        "DEVICE_DMA_FINISH_INT",
+	        "DEVICE_DMA_ERROR_INT",
+	        "DEVICE_IDLE_INT",
+	        "DEVICE_WAKEUP_INT",
+	        "B_SRP_COMPLETE_INT",
+	        "A_SRP_DETECT_INT",
+	        "A_VBUS_ERROR_INT",
+	        "B_SESSION_END_INT",
+	        "OVERCURRENT_INT",
+	        "HOST_PORT_CONNECT_STATUS_CHANGE_INT",
+	        "HOST_PORT_ENABLE_DISABLE_CHANGE_INT",
+	        "HOST_PORT_OVERCURRENT_CHANGE_INT",
+	        "HOST_PORT_FORCE_PORT_RESUME_INT",
+	        "HOST_SYSTEM_ERROR_INT",
+	    };
+	    if(event <= USB_HOST_CONFIGURE_EVENT) {
+	    	printf("%s\n", usb_event_names[event]);
+	    }
 		unsigned int x, y;
 		os_GetCursorPos(&x, &y);
 		os_SetCursorPos(0, 0);
-		sprintf(tmp, "%d", nbdebug++);
-		os_PutStrFull(tmp);
+		printf("%lu    ", usb_GetCycleCounter());
+		switch(netinfo.state) {
+			case STATE_USB_CONNECTED:
+				printf("CONNECTED   ");
+				break;
+			case STATE_USB_ENABLED:
+				printf("ENABLED     ");
+				break;
+			case STATE_RNDIS_CONFIGURING:
+				printf("RNDIS       ");
+				break;
+			case STATE_DHCP_CONFIGURING:
+				printf("DHCP        ");
+				break;
+			case STATE_NETWORK_CONFIGURED:
+				printf("NETWORK     ");
+				break;
+			case STATE_UNKNOWN:
+				printf("UNKNOWN     ");
+				break;
+			case STATE_USB_LOST:
+				printf("LOST        ");
+				break;
+			default:
+				printf("???         ");
+				break;
+		}
 		os_SetCursorPos(x, y);
 	#endif // DEBUG
-	if(netinfo.configuring && event == USB_DEVICE_CONNECTED_EVENT)
-	{
-		boot_NewLine();
-		os_PutStrFull("CONNECTED");
-		boot_NewLine();
-		netinfo.device = (usb_device_t)event_data;
-		netinfo.state = STATE_USB_CONNECTED;
-		// usb_ResetDevice(netinfo.device);
-		os_PutStrFull("RESETED");
-		boot_NewLine();
-	}
-	else if(event == USB_DEVICE_ENABLED_EVENT) {
-		os_PutStrFull("ENABLED");
-		boot_NewLine();
-		netinfo.state = STATE_USB_ENABLED;
-	} else if(event == USB_DEVICE_DISABLED_EVENT) {
-		os_PutStrFull("DISABLED");
-		boot_NewLine();
-		netinfo.state = STATE_UNKNOWN;
-	} else if(event == USB_DEVICE_DISCONNECTED_EVENT) {
-		usb_Cleanup();
-		usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
-		netinfo.state = STATE_UNKNOWN;
-		os_PutStrFull("DISCONNECTED");
-		boot_NewLine();
-	}
+
 	return USB_SUCCESS;
-
-
-	// le problème situe au niveau de la déco, que l'on déco la calc à la main ou que ce soit via activation du partage de co usb, la déco RC
 }
+
+
+// Le pb est déplacé au dhcp maintenant. Mais ce qu'il y a avant semble fonctionner OK.
+// Juste il semble qu'il y ait un ram cleared après l'init rndis parfois, à voir...
+
+
+// PB: quand on débranche ou qu'on désactive le partage de co quand on est en RNDIS ça RC ou ça freeze
+//	-> Sachant que ça arrive que quand on a fait deux trois transfer déjà
+//	-> peut-être que plus on est dans handleEvents plus ça a des chance de bugger ?
+// est-ce que le problème peut être résolu avec RefDevice ? ça n'a pas l'air
+// est-ce que si on disable à la main ça marche mieux ? bah oui mais on ne sait pas quand ça va être débranché
+// est-ce que si on maniupule le timing d'appel avec usb_HandleEvents avec des sleep ça a moins de chance de bugger ?
+
+//NEW
+// Est-ce que le pb serait pas lié à une histoire de timer ? parce que dans le cas ou on déco le device, le frame number est reset à 0
+//	  -> il se passe donc un truc après que le cable soit retiré, comme le détecter ?
+//	  -> Est-ce que si je fais un if connected avant handleEvents je pourrais éviter qu'il bloque ?
+
+//  + autres pb
+//		-> les RC intempestifs quand j'active le tethering
+//		-> les requetes HTTP qui aboutissent une fois sur 2
+//		-> le web_CleanUp qui RC, apparemment au niveau des free des ports (d'ailleurs dhcp n'est pas free ? http peut-être pas non plus ?)
 
 
 #ifdef DEBUG
 void debug(const void *addr, size_t len) {
 	uint8_t *content = (uint8_t*)addr;
-	char tmp[4];
 	size_t i;
 	const char *DIGITS = "0123456789ABCDEF";
 	for(i=0; i<len; i++) {
 		if(i && i%8 == 0)
-			boot_NewLine();
-		tmp[0] = ' ';
-		tmp[1] = DIGITS[*(content+i)/16];
-		tmp[2] = DIGITS[*(content+i)%16];
-		tmp[3] = 0;
-		os_PutStrFull(tmp);
+			printf("\n");
+		printf(" %c%c", DIGITS[*(content+i)/16], DIGITS[*(content+i)%16]);
 	}
-	boot_NewLine();
+	printf("\n");
 }
 
 void disp(unsigned int val) {
@@ -1367,5 +1494,13 @@ void disp(unsigned int val) {
 	sprintf(tmp, "DISP : %u ", value);
 	os_PutStrFull(tmp);
 	boot_NewLine();
+}
+
+void printf_xy(unsigned int xpos, unsigned int ypos, const char *txt) {
+	unsigned int x, y;
+	os_GetCursorPos(&x, &y);
+	os_SetCursorPos(xpos, ypos);
+	printf("%s ", txt);
+	os_SetCursorPos(x, y);
 }
 #endif // DEBUG
