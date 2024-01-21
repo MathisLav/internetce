@@ -987,7 +987,7 @@ uint32_t web_SendDNSRequest(const char *url) {
 	if(dns_exch != NULL) {
 		while(!res_ip) {
 			web_WaitForEvents();
-			if(timeout > rtc_Time()) {
+			if(timeout <= rtc_Time()) {
 				web_popMessage(dns_exch->queued_request);
 				web_UnlistenPort(dns_exch->port_src);
 				free(dns_exch);
