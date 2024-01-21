@@ -1895,13 +1895,14 @@ static web_status_t fetch_udp_datagram(udp_datagram_t *datagram, size_t length, 
 }
 
 static web_status_t fetch_icmpv4_msg(icmpv4_echo_t *msg, size_t length, uint32_t ip_src) {
-	if(msg->type != ICMP_ECHO_REQUEST || msg->code != 0)
+	if(msg->type != ICMP_ECHO_REQUEST || msg->code != 0) {
 		return WEB_SUCCESS;
+	}
+	dbg_info("Received ping");
 
 	msg->type = ICMP_ECHO_REPLY;
 	msg->checksum += ICMP_ECHO_REQUEST - ICMP_ECHO_REPLY; /* Difference between the two messages */
 	/* Send IPv4 packet */
-	dbg_info("Received Ping");
 	return web_SendIPv4Packet((uint8_t*)msg, length, ip_src, ICMP_PROTOCOL);
 }
 
@@ -1915,7 +1916,7 @@ static web_status_t fetch_IPv4_packet(ipv4_packet_t *pckt, size_t length) {
 		return WEB_ERROR_FAILED;
 	}
 	if(pckt->FlagsFragmentOffset != 0 && pckt->FlagsFragmentOffset != 0x40) {
-		dbg_warn("Received IPv4 fragmented packet");
+		dbg_warn("Received fragmented IPv4 packet");
 	}
 
 	switch(pckt->Protocol) {
