@@ -15,43 +15,35 @@
 #include <stdlib.h>
 #include <string.h>
 
-void putStrnFull(const void *str, size_t len);
-
 
 int main(void)
 {
 	os_ClrHome();
-	os_PutStrFull("WEB Connection... ");
+	printf("WEB Connection... ");
 	
 	web_Init();
-	while(!web_Connected() && !os_GetCSC())
+	while(!web_Connected() && !os_GetCSC()) {
 		web_WaitForEvents();
+	}
 	if(!web_Connected()) {
-		boot_NewLine();
-		os_PutStrFull("Canceled!");
-		while(!os_GetCSC()) {}
+		printf("\nCanceled!\n");
 		goto _end;
 	}
-	os_PutStrFull("Done!");
-	boot_NewLine();
+	printf("Done!\n");
 
-	os_PutStrFull("HTTP Request...");
+	printf("HTTP Request...");
 	http_data_t *data = NULL;
-	web_HTTPPost("assemblyschool.alwaysdata.net/cewireless/post.php", &data, false, 2, "azer", "wesh", "83pce", "oui-oui");
-	os_ClrHome();
-	putStrnFull(data->data, data->size);
-	while(!os_GetCSC()) {}
+	web_status_t status = web_HTTPPost("geometrydash.fr.nf/internetce/post.php", &data, false, 2, "azer", "wesh",
+									   "83pce", "yeet");
+	if(status == HTTP_STATUS_OK) {
+		os_ClrHome();
+		printf("%.*s", data->size, data->data);
+	} else {
+		printf("Err %u: couldn't retrieve foreign data\n", status);
+	}
 
 	_end:
+	while(!os_GetCSC()) {}
 	web_Cleanup();
 	return 0;
-}
-
-
-void putStrnFull(const void *str, size_t len) {
-	char *tmp = calloc(1, len+1);
-	strncpy(tmp, str, len);
-	os_PutStrFull(tmp);
-	boot_NewLine();
-	free(tmp);
 }

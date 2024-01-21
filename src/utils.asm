@@ -34,14 +34,15 @@ _MoveToArc:
 	call _OP1ToOP6
 	call _ChkFindSym
 	ld hl,0
-	pop ix
-	ret c
+	jq c,.quit
 	call _ChkInRam
-	ret nz
+	jq nz,.quit
 	call _Arc_Unarc
 	call _OP6ToOP1
 	call _ChkFindSym
 	ex de,hl
+.quit:
+	pop ix
 	ret
 
 
@@ -58,14 +59,15 @@ _MoveToRam:
 	call _OP1ToOP6
 	call _ChkFindSym
 	ld hl,0
-	pop ix
-	ret c
+	jq c,.quit
 	call _ChkInRam
-	ret z
+	jq z,.quit
 	call _Arc_Unarc
 	call _OP6ToOP1
 	call _ChkFindSym
 	ex de,hl
+.quit:
+	pop ix
 	ret
 
 
@@ -91,17 +93,18 @@ _os_DelVarArc:
 	ld hl,(ix+9)
 	ld (OP1),a
 	ld de,OP1+1
-	ld bc,9
+	ld bc,8
 	ldir
 	call _ChkFindSym
-	pop ix
-	jr c,.err_not_found
+	jq c,.err_not_found
 	call _DelVarArc
 	ld hl,1
+	pop ix
 	ret
 .err_not_found:
 	or a
 	sbc hl,hl
+	pop ix
 	ret
 
 	section .text
@@ -119,15 +122,14 @@ _ResizeAppVar:
 	ldir
 	call _ChkFindSym
 	ld hl,0
-	jq c,.quit ; return 0
+	jq c,.quit_return_0
 	call _ChkInRam
-	jq nz,.quit ; return 0
+	jq nz,.quit_return_0
 	ex de,hl
 	ld e,(hl)
 	inc hl
 	ld d,(hl)
-	ld c,(ix+9) ; BCU is already 0
-	ld b,(ix+10)
+	ld bc,(ix+9)
 	ld (hl),b
 	dec hl
 	ld (hl),c
@@ -136,7 +138,7 @@ _ResizeAppVar:
 	or a
 	sbc hl,bc
 	pop ix
-	jr z,.quit ; return 0
+	jq z,.quit_return_0
 	push ix
 	jq nc,.shrinkSize
 
@@ -151,9 +153,7 @@ _ResizeAppVar:
 	add hl,bc
 	ex de,hl
 	call _InsertMem
-	ld hl,1
-	pop ix
-	ret ; return 1
+	jq .quit_return_1
 
 .shrinkSize:
 	ex de,hl
@@ -162,9 +162,15 @@ _ResizeAppVar:
 	inc hl
 	call _DelMem
 	pop de ; reset stack
-	ld hl,1
 
-.quit:
+.quit_return_1:
+	ld hl,1
+	pop ix
+	ret
+
+.quit_return_0:
+	or a,a
+	sbc hl,hl
 	pop ix
 	ret
 

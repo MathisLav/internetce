@@ -10,32 +10,26 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool ended = false;
+static bool ended = false;
 
 void disp_hex(const void *addr, size_t len) {
-	uint8_t *content = (uint8_t*)addr;
-	char tmp[4];
-	size_t i;
-	const char *DIGITS = "0123456789ABCDEF";
-	for(i=0; i<len; i++) {
-		if(i && i%8 == 0)
-			boot_NewLine();
-		tmp[0] = ' ';
-		tmp[1] = DIGITS[*(content+i)/16];
-		tmp[2] = DIGITS[*(content+i)%16];
-		tmp[3] = 0;
-		os_PutStrFull(tmp);
+	uint8_t *content = (uint8_t *)addr;
+	for(size_t i = 0; i < len; i++) {
+		if(i && i % 8 == 0) {
+			printf("\n");
+		}
+		printf("%.2X ", *(content + i));
 	}
-	boot_NewLine();
+	printf("\n");
 }
 
 
 usb_error_t dns_callback(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
 	(void)protocol; (void)length;
-	msg_queue_t *queued = (msg_queue_t*)user_data;
+	msg_queue_t *queued = (msg_queue_t *)user_data;
 	web_popMessage(queued);
 
-	disp_hex(msg, 64);
+	disp_hex(msg, length);
 	while(!os_GetCSC()) {}
 
 	web_UnlistenPort(port);
@@ -47,35 +41,34 @@ usb_error_t dns_callback(web_port_t port, uint8_t protocol, void *msg, size_t le
 int main(void)
 {
 	os_ClrHome();
-	os_PutStrFull("WEB Connection... ");
+	printf("WEB Connection... ");
 	
 	web_Init();
-	while(!web_Connected() && !os_GetCSC())
+	while(!web_Connected() && !os_GetCSC()) {
 		web_WaitForEvents();
+	}
 	if(!web_Connected()) {
-		boot_NewLine();
-		os_PutStrFull("Canceled!");
+		printf("\nCanceled!\n");
 		while(!os_GetCSC()) {}
 		goto _end;
 	}
-	os_PutStrFull("Done!");
-	boot_NewLine();
+	printf("Done!\n");
 
 	/* Beginning of the DNS stuffs */
 	const char url[] = "www.perdu.com";
-	size_t length = sizeof(dns_message_t)+strlen(url)+2+4; /* dns_message_t : CF internet.h */
+	size_t length = sizeof(dns_message_t) + strlen(url) + 2 + 4; /* dns_message_t : CF internet.h */
 	uint8_t *query = calloc(length, 1);
 
 	query[2] = 0x01;
 	query[5] = 0x01;
 
 	/* formating address for dns purposes */
-	char *cursor_qry = (char*)(query+sizeof(dns_message_t)+1);
+	char *cursor_qry = (char *)(query + sizeof(dns_message_t) + 1);
 	const char *cursor_str = url;
 	uint8_t i = 1;
 	while(*cursor_str) {
 		if(*cursor_str == '.') {
-			*(cursor_qry-i) = i-1;
+			*(cursor_qry - i) = i - 1;
 			i = 0;
 		} else
 			*cursor_qry = *cursor_str;
@@ -83,18 +76,19 @@ int main(void)
 		cursor_str++;
 		cursor_qry++;
 	}
-	*(cursor_qry-i) = i-1;
+	*(cursor_qry - i) = i - 1;
 	*cursor_qry = 0;
-	*(cursor_qry+2) = 1; /* A (IPv4) */
-	*(cursor_qry+4) = 1; /* IN (internet) */
+	*(cursor_qry + 2) = 1; /* A (IPv4) */
+	*(cursor_qry + 4) = 1; /* IN (internet) */
 
 	web_port_t client_port = web_RequestPort();
 	msg_queue_t *queued = web_PushUDPDatagram(query, length, 0x08080808, client_port, DNS_PORT);
 	free(query);
 	web_ListenPort(client_port, dns_callback, queued);
 
-	while(!os_GetCSC() && !ended) // ended : global variable
+	while(!os_GetCSC() && !ended) { // ended : global variable
 		web_WaitForEvents();
+	}
 
 	_end:
 	web_Cleanup();

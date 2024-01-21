@@ -1,7 +1,7 @@
 /**
- *	Performs a HTTP GET request to www.perdu.com. Used features :
+ *	Performs an HTTP GET request to www.perdu.com. Used features :
  *		- Initializing and cleaning up the library.
- *		- Performing a HTTP GET request.
+ *		- Performing an HTTP GET request.
  */
 
 
@@ -9,43 +9,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-void putStrnFull(const void *str, size_t len);
-
 
 int main(void)
 {
 	os_ClrHome();
-	os_PutStrFull("WEB Connection... ");
+	printf("WEB Connection... ");
 	
 	web_Init();
-	while(!web_Connected() && !os_GetCSC())
+	while(!web_Connected()) {
 		web_WaitForEvents();
-	if(!web_Connected()) {
-		boot_NewLine();
-		os_PutStrFull("Canceled!");
-		while(!os_GetCSC()) {}
-		goto _end;
+		if(os_GetCSC()) {
+			printf("Canceled!\n");
+			goto _end;
+		}
 	}
-	os_PutStrFull("Done!");
-	boot_NewLine();
+	printf("Done!\n");
 
-	os_PutStrFull("HTTP Request...");
+	printf("HTTP Request...\n");
 	http_data_t *data = NULL;
-	web_HTTPGet("www.perdu.com", &data, false);
-	os_ClrHome();
-	putStrnFull(data->data, data->size);
-	while(!os_GetCSC()) {}
+	web_status_t status = web_HTTPGet("geometrydash.fr.nf", &data, false);
+	if(status == HTTP_STATUS_OK) {
+		os_ClrHome();
+		printf("%.*s", data->size, data->data);
+	} else {
+		printf("Err %u: couldn't retrieve foreign data\n", status);
+	}
 
 	_end:
+	while(!os_GetCSC()) {}
 	web_Cleanup();
 	return 0;
-}
-
-
-void putStrnFull(const void *str, size_t len) {
-	char *tmp = calloc(1, len+1);
-	strncpy(tmp, str, len);
-	os_PutStrFull(tmp);
-	boot_NewLine();
-	free(tmp);
 }
