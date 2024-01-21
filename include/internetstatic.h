@@ -68,6 +68,7 @@
  */
 
 static uint32_t ip_ascii_to_hex(const char *ipstr);
+static void check_timeout(http_exchange_t *exch);
 static web_status_t http_request(const char *request_type, const char* url, http_data_t **data, bool keep_http_header,
 								 char *params);
 static void close_tcp_connection(http_exchange_t *exch);
