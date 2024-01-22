@@ -29,21 +29,6 @@ static port_list_t *listened_ports = NULL;
 static http_exchange_list_t *http_exchanges;
 
 
-// TODOS:
-//	- Tester la nouvelle version d'USBDRVCE pour voir si ça résoud le pb de crash en déco ?
-
-// LONG TERME:
-//	- Faire des fonctions http des fonctions mirroires non bloquantes -> callback HTTP
-//	- Dispatcher le tout dans plusieurs fichiers parce que là c'est horrible
-//	- Compléter le support de DHCP notamment lease duration / 
-//		-> je pense que je ne peux pas query la même IP qu'à l'exec précédente parce que mon MAC change
-//		   A voir si le serveur DHCP se repose sur ça pour accepter l'IP ?
-//	- Enelever les variables globales ? -> création d'une variable socket
-//	- se rapprocher de l'API POSIX ?
-//	- Supporter le split TCP côté client ?
-//	- Gérer TLS / HTTPS
-
-
 web_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_header) {
 	char pointer_to_null = 0x00;
 	return http_request("GET", url, data, keep_http_header, &pointer_to_null);
@@ -250,8 +235,8 @@ static void close_tcp_connection(http_exchange_t *exch) {
 }
 
 
-static int add_tcp_queue(char *data, size_t length, http_exchange_t *exchange, uint16_t flags,
-						 size_t opt_size, const uint8_t *options) {
+static int add_tcp_queue(char *data, size_t length, http_exchange_t *exchange, uint16_t flags, size_t opt_size,
+						 const uint8_t *options) {
 	/**
 	 *	- Add segment to send_queue (call web_PushTCPSegment)
 	 *	- Add segment to http queue (http_exchange_t pushed_seg field)
@@ -427,7 +412,7 @@ static web_status_t return_http_data(http_exchange_t *exch) {
 				exch->dirty = true;
 				exch->tcp_exch.tcp_state = TCP_STATE_CLOSED;
 				return WEB_ERROR_FAILED;
-			} else if (chunk_size == 0) {
+			} else if(chunk_size == 0) {
 				prev_chunk_offset = cur_seg->pl_length;  /* Not copying what comes next */
 				stop = true;
 				break;
@@ -483,7 +468,7 @@ static void fetch_tcp_flags(const tcp_segment_t *tcp_seg, http_exchange_t *exch,
 		exch->tcp_exch.tcp_state = TCP_STATE_ESTABLISHED;
 	}
 
-	/* if RST */
+	/* If RST */
 	if(tcp_seg->dataOffset_flags & htons(FLAG_TCP_RST)) {
 		dbg_warn("RST received");
 		exch->dirty = true;
@@ -683,7 +668,7 @@ static web_status_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg,
 		exch->status = WEB_NOT_ENOUGH_MEM;
 		return WEB_NOT_ENOUGH_MEM;
 	}
-	memcpy(response, msg, length);  // TODO pas besoin de stocker le header tcp en fait ?
+	memcpy(response, msg, length);  // TODO no need to store the TCP header?
 
 	tcp_segment_list_t *new_segment_list = malloc(sizeof(tcp_segment_list_t));
 	if(!new_segment_list) {
@@ -947,7 +932,6 @@ int web_LockData(http_data_t **http_data) {
 	return 1;
 }
 
-
 void web_Cleanup() {
 	/* Freeing listened_ports */
 	port_list_t *cur_port = listened_ports;
@@ -1103,7 +1087,6 @@ static web_status_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, 
 	return WEB_SUCCESS;
 }
 
-
 msg_queue_t *web_PushDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip) {
 	static uint32_t xid = 0;
 	if(xid == 0) {  /* If not initialized yet */
@@ -1125,8 +1108,8 @@ msg_queue_t *web_PushDHCPMessage(size_t opt_size, const uint8_t *options, uint32
 	memcpy(&dhcp_query->options, options, opt_size);
 	dhcp_query->siaddr = dhcp_server_ip;  /* = 0 at first */
 
-	return web_PushUDPDatagram(dhcp_query, sizeof(dhcp_message_t) + opt_size, 0xffffffff,
-							   CLIENT_DHCP_PORT, SERVER_DHCP_PORT);
+	return web_PushUDPDatagram(dhcp_query, sizeof(dhcp_message_t) + opt_size, 0xffffffff, CLIENT_DHCP_PORT,
+							   SERVER_DHCP_PORT);
 }
 
 web_status_t web_SendDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip) {
@@ -1156,8 +1139,8 @@ static web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg,
 
 	if(dhcp_msg->op == DHCP_OP_REPLY) {
 		const uint8_t *cur_opt = (uint8_t *)((uint8_t *)dhcp_msg + sizeof(dhcp_message_t));
-		while(*cur_opt != DHCP_OPT_END_OPTIONS) {
-			switch(*cur_opt) {
+		while(cur_opt[0] != DHCP_OPT_END_OPTIONS) {
+			switch(cur_opt[0]) {
 				case DHCP_OPT_TYPE_ID:
 					if(cur_opt[2] == DHCP_OPT_V_OFFER && netinfo.dhcp_cur_state == DHCP_STATE_INIT) {
 						if(dhcp_last_msg_queue != NULL) {
@@ -1201,7 +1184,7 @@ static web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg,
 					}
 					break;
 				case 58: /* T1 Lease time */
-					//t1_leasetime = rtc_Time() + htonl(*(cur_opt + 2));
+					// TODO t1_leasetime = rtc_Time() + htonl(*(cur_opt + 2));
 					break;
 				default:
 					break;
@@ -1212,11 +1195,10 @@ static web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg,
 	return WEB_SUCCESS;
 }
 
-
-static msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t length_data,
-											  uint32_t ip_dst, web_port_t port_src, web_port_t port_dst,
-											  uint32_t seq_number, uint32_t ack_number, uint16_t flags,
-											  size_t opt_size, const uint8_t *options) {
+static msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t length_data, uint32_t ip_dst,
+											  web_port_t port_src, web_port_t port_dst, uint32_t seq_number,
+											  uint32_t ack_number, uint16_t flags, size_t opt_size,
+											  const uint8_t *options) {
 	if(data - (sizeof(tcp_segment_t) + opt_size) < buffer) {
 		dbg_err("Can't push TCP segment");
 		return NULL;
@@ -1244,10 +1226,9 @@ static msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t l
 	return _recursive_PushIPv4Packet(buffer, tcp_seg, size_all, ip_dst, TCP_PROTOCOL);
 }
 
-msg_queue_t *web_PushTCPSegment(void *data, size_t length_data, uint32_t ip_dst,
-								web_port_t port_src, web_port_t port_dst, uint32_t seq_number,
-								uint32_t ack_number, uint16_t flags, size_t opt_size,
-								const uint8_t *options) {
+msg_queue_t *web_PushTCPSegment(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
+								web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags,
+								size_t opt_size, const uint8_t *options) {
 	void *buffer = _alloc_msg_buffer(data, length_data, TCP_HEADERS_SIZE + opt_size, true);
 	if(buffer == NULL) {
 		return NULL;
@@ -1257,18 +1238,16 @@ msg_queue_t *web_PushTCPSegment(void *data, size_t length_data, uint32_t ip_dst,
 									 opt_size, options);
 }
 
-web_status_t web_SendTCPSegment(void *data, size_t length_data, uint32_t ip_dst,
-								web_port_t port_src, web_port_t port_dst, uint32_t seq_number,
-								uint32_t ack_number, uint16_t flags, size_t opt_size,
-								const uint8_t *options) {
-	msg_queue_t *queued = web_PushTCPSegment(data, length_data, ip_dst, port_src, port_dst,
-											 seq_number, ack_number, flags, opt_size, options);
+web_status_t web_SendTCPSegment(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
+								web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags,
+								size_t opt_size, const uint8_t *options) {
+	msg_queue_t *queued = web_PushTCPSegment(data, length_data, ip_dst, port_src, port_dst, seq_number, ack_number,
+											 flags, opt_size, options);
 	if(queued != NULL) {
 		queued->waitingTime = 0;  /* Send once */
 	}
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
-
 
 static uint16_t transport_checksum(void *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {
 	uint8_t checksum_hdr[sizeof(network_pseudo_hdr_t) + length];
@@ -1304,25 +1283,23 @@ static msg_queue_t *_recursive_PushUDPDatagram(void *buffer, void *data, size_t 
 	return _recursive_PushIPv4Packet(buffer, datagram, size, ip_dst, UDP_PROTOCOL);
 }
 
-msg_queue_t *web_PushUDPDatagram(void *data, size_t length_data, uint32_t ip_dst,
-								 web_port_t port_src, web_port_t port_dst) {
+msg_queue_t *web_PushUDPDatagram(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
+								 web_port_t port_dst) {
 	void *buffer = _alloc_msg_buffer(data, length_data, UDP_HEADERS_SIZE, true);
 	if(buffer == NULL) {
 		return NULL;
 	}
-	return _recursive_PushUDPDatagram(buffer, buffer + UDP_HEADERS_SIZE - 4, length_data, ip_dst,
-									  port_src, port_dst);
+	return _recursive_PushUDPDatagram(buffer, buffer + UDP_HEADERS_SIZE - 4, length_data, ip_dst, port_src, port_dst);
 }
 
-web_status_t web_SendUDPDatagram(void *data, size_t length_data, uint32_t ip_dst,
-								 web_port_t port_src, web_port_t port_dst) {
+web_status_t web_SendUDPDatagram(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
+								 web_port_t port_dst) {
 	msg_queue_t *queued = web_PushUDPDatagram(data, length_data, ip_dst, port_src, port_dst);
 	if(queued != NULL) {
 		queued->waitingTime = 0;  /* Send once */
 	}
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
-
 
 web_status_t web_SendICMPEchoRequest(uint32_t ip_dst) {
 	icmpv4_echo_t icmp_echo = {
@@ -1335,7 +1312,6 @@ web_status_t web_SendICMPEchoRequest(uint32_t ip_dst) {
 	icmp_echo.checksum = ipv4_checksum(&icmp_echo, sizeof(icmp_echo));
 	return web_SendIPv4Packet(&icmp_echo, sizeof(icmpv4_echo_t), ip_dst, ICMP_PROTOCOL);
 }
-
 
 static msg_queue_t *_recursive_PushIPv4Packet(void *buffer, void *data, size_t length_data, uint32_t ip_dst,
 											  uint8_t protocol) {
@@ -1467,12 +1443,12 @@ web_status_t web_SendEthernetFrame(void *data, size_t length_data, uint16_t prot
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
 
-#define CRC_POLY 0xEDB88320
 static uint32_t crc32b(void *data, size_t length) {
 	/**
 	 *	Computes ethernet crc32.
 	 *	Code found on stackoverflow.com (no licence was given to the code)
 	 */
+	const uint32_t crc_poly = 0xEDB88320;
     uint32_t crc;
 	unsigned int i, j;
 
@@ -1483,7 +1459,7 @@ static uint32_t crc32b(void *data, size_t length) {
     for(j = 0; j < length; j++) {
 		crc ^= ((uint8_t *)data)[j];
 		for(i = 0; i < 8; i++) {
-        	crc = (crc & 1) ? ((crc >> 1) ^ CRC_POLY) : (crc >> 1);
+        	crc = (crc & 1) ? ((crc >> 1) ^ crc_poly) : (crc >> 1);
 		}
     }
     return ~crc;
@@ -1533,7 +1509,6 @@ static void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_to
 	return buffer;
 }
 
-
 void web_Init() {
 	netinfo.ep_wc_in = 0;
 	netinfo.ep_cdc_in = 0;
@@ -1546,7 +1521,6 @@ void web_Init() {
 	srand(rtc_Time());
 	MAC_ADDR[5] = randInt(0, 0xFF);
 }
-
 
 static uint24_t get_chunk_size(const char *ascii, const char *max_ptr, uint24_t *chunk_chars) {
 	/**
@@ -1598,7 +1572,7 @@ bool web_Connected() {
 }
 
 static web_status_t handle_send_msg_queue() {
-	// TODO c'est bête d'envoyer les messages les plus récents en premier
+	// TODO send the messages as a queue, and not as a stack (FIFO)
 	const uint32_t current_time = rtc_Time();
 	msg_queue_t *cur_msg = send_queue;
 	while(cur_msg) {
@@ -1729,7 +1703,6 @@ void web_UnlistenPort(web_port_t port) {
 		cur_port = next_port;
 	}
 }
-
 
 msg_queue_t *web_PushMessage(void *msg, size_t length) {
 	msg_queue_t *new_msg = malloc(sizeof(msg_queue_t));
@@ -1971,7 +1944,6 @@ static web_status_t fetch_ethernet_frame(eth_frame_t *frame, size_t length) {
 
 	return WEB_SUCCESS;
 }
-
 
 static web_status_t packets_callback(size_t transferred, void *data) {
 	if(transferred >= MAX_SEGMENT_SIZE + 110) {
