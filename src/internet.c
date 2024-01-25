@@ -1,3 +1,8 @@
+// TODO
+//	- Splitter les protocoles dans des fichiers différents
+//	- Créer sur l'ordi un webserver de test et un programme de test de la lib avec différents test cases
+
+
 #include "../include/internetstatic.h"
 #include <tice.h>
 #include <keypadc.h>
@@ -1613,6 +1618,7 @@ static void handle_tcp_connections() {
 			}
 			wipe_http_exchange(http_exch);
 		}
+		prev_connection = cur_connection;
 		cur_connection = cur_connection->next;
 	}
 }

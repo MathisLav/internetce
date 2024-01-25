@@ -43,6 +43,6 @@ int main(void) {
 ```
 
 ## Help & Bug report
-As mentionned, some examples of use are available in the [examples folder](examples/). You can draw inspiration from those programs.
+As mentioned, some examples of use are available in the [examples folder](examples/). You can draw inspiration from those programs.
 If you can't find what you want, feel free to ask your questions on forums such as Ti-Planet or Cemetech.
 This library may contain bugs. If you encounter one, please contact me on www.tiplanet.org or www.cemetech.net (Epharius).
