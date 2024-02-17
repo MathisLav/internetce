@@ -313,6 +313,7 @@ typedef struct network_info {
 	uint8_t ep_cdc_out;
 	uint8_t ep_wc_in;
 	uint8_t router_MAC_addr[6];
+	uint8_t my_MAC_addr[6];
 	uint32_t DNS_IP_addr;
 	uint32_t IP_addr;
 	dhcp_state_t dhcp_cur_state;
@@ -328,7 +329,7 @@ typedef struct port_list {
 typedef struct tcp_segment_list {
 	uint32_t relative_sn;
 	size_t pl_length;		/**< Length of the payload of the segment				*/
-	tcp_segment_t *segment;	/**< The very segment									*/
+	void *payload;			/**< The payload										*/
 	struct tcp_segment_list *next;
 } tcp_segment_list_t;
 
@@ -368,32 +369,35 @@ typedef struct tcp_exchange {
 	uint32_t cur_sn;					/**< Current client's sequence number (SN of the next-sent segment)	*/
 	uint32_t beg_ackn;					/**< First server's sequence number, set just after SYN ACK			*/
 	uint32_t cur_ackn;					/**< Current server's sequence number (our ack number)				*/
-	tcp_segment_list_t *segment_list;	/**< Received data													*/
-	pushed_seg_list_t *pushed_seg;		/**< The segments pushed on the send queue that are waiting for an ack */
+	tcp_segment_list_t *in_segments;	/**< Received data that has not been sent to the application yet	*/
+	tcp_segment_list_t *last_in_acked;	/**< The last in segment that has been sent to the application user	*/
+	pushed_seg_list_t *out_segments;	/**< The segments pushed on the send queue that are waiting for an ack */
 	uint32_t timeout_close;				/**< If in TIME_WAIT state: the time when closing and freeing the connection */
+	bool dirty;							/**< Connection to delete as soon as possible						*/
+	web_port_callback_t *callback;		/**< Callback when a packet is addressed to port_src				*/
+	web_callback_data_t *user_data;		/**< In our case, an http_exchange_t structure						*/
 } tcp_exchange_t;
 
 typedef struct http_exchange {
-	tcp_exchange_t tcp_exch;
-	uint32_t timeout;					/**< Timeout date, updated each time we receive an "interesting" segment */
 	bool data_chunked;
 	size_t content_length;
 	size_t content_received;
 	size_t header_length;
 	size_t chunks_metadata_length;		/**< Size of all the characters encoding chunks metadata			*/
-	size_t next_chunk_rsn;				/**< Relative SN of the next chunk									*/
-	uint32_t rsn_end_chunk;				/**< If != 0, equal to the RSN where the end of the chunk metadata is */
-	uint32_t next_hdrseg_check;			/**< Relative SN of the next header segment check (see 4th process)	*/
+	size_t offset_next_chunk;			/**< Offset from beggining of the next chunk						*/
 	http_data_t **data;					/**< Where to put the result										*/
+	void *buffer;						/**< Temporary buffer while receiving data							*/
+	size_t buffer_size;
 	bool keep_http_header;
+	uint32_t timeout;					/**< Timeout date, updated each time we receive an "interesting" segment */
 	web_status_t status;				/**< Set when the request is finished (successfuly or with an error) */
-	bool dirty;							/**< Connection to delete as soon as possible						*/
+	bool dirty;
 } http_exchange_t;
 
-typedef struct http_exchange_list {
-	http_exchange_t *http_exch;
-	struct http_exchange_list *next;
-} http_exchange_list_t;
+typedef struct tcp_exchange_list {
+	tcp_exchange_t tcp_exch;
+	struct tcp_exchange_list *next;
+} tcp_exchange_list_t;
 
 
 /**
@@ -574,6 +578,31 @@ msg_queue_t *web_PushDHCPMessage(size_t opt_size, const uint8_t *options, uint32
 web_status_t web_SendDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip);
 
 /**
+ * 
+ */
+tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_callback_t *callback,
+							   web_callback_data_t *user_data);
+
+/**
+ * 
+ */
+void web_TCPClose(tcp_exchange_t *tcp_exch);
+
+/**
+ *  @brief	Deliver a TCP segment to the host connected to tcp_exchange.
+ * 	@note	The function insures the correct delivery of the segment with a system of acknowledgement.
+ * 	@param	tcp_exch The TCP exchange structure, returned by web_TCPConnect.
+ * 	@param	data The data that must be delivered.
+ * 	@param	length The length of the data.
+ * 	@param	flags The TCP flags to send. If equals to 0 or \c FLAG_TCP_NONE, this will be set to \c FLAG_TCP_ACK.
+ * 	@param	opt_size The size of the TCP options to send (if any).
+ * 	@param	options The TCP options to send (or NULL).
+ * 	@returns  \c WEB_SUCCESS or an error.
+ */
+web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, char *data, size_t length, uint16_t flags, size_t opt_size,
+				  				   const uint8_t *options);
+
+/**
  *	@brief	Schedules the delivery of a TCP segment.
  *	@note	Use \c web_WaitForEvents() to actually send the TCP segment.
  *	@param	data The data that must be encapsulated in the TCP header.
@@ -590,9 +619,9 @@ web_status_t web_SendDHCPMessage(size_t opt_size, const uint8_t *options, uint32
  *			be a multiple of 4.
  *	@returns \c WEB_SUCESS or an error.
  */
-web_status_t web_SendTCPSegment(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
-								web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags,
-								size_t opt_size, const uint8_t *options);
+web_status_t web_SendRawTCPSegment(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
+								   web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags,
+								   size_t opt_size, const uint8_t *options);
 
 /**
  *	@brief	Pushes a TCP segment on the sending queue. The segment will be re-sent every \c SEND_EVERY seconds until
@@ -613,9 +642,9 @@ web_status_t web_SendTCPSegment(void *data, size_t length_data, uint32_t ip_dst,
  *	@returns A structure that must be passed to \c web_popMessage() once a response has been received
  *			(for example an acknowledgment).
  */
-msg_queue_t *web_PushTCPSegment(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
-								web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags,
-								size_t opt_size, const uint8_t *options);
+msg_queue_t *web_PushRawTCPSegment(void *data, size_t length_data, uint32_t ip_dst, web_port_t port_src,
+								   web_port_t port_dst, uint32_t seq_number, uint32_t ack_number, uint16_t flags,
+								   size_t opt_size, const uint8_t *options);
 
 /**
  *	@brief	Schedules the delivery of an UDP datagram.
