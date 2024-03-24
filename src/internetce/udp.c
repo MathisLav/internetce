@@ -1,4 +1,5 @@
 #include <internet.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 #include "include/udp.h"
@@ -39,6 +40,7 @@ msg_queue_t *_recursive_PushUDPDatagram(void *buffer, void *data, size_t length_
 											   web_port_t port_src, web_port_t port_dst) {
 	if(data - sizeof(udp_datagram_t) < buffer) {
 		dbg_err("Can't push UDP datagram");
+		free(buffer);
 		return NULL;
 	}
 

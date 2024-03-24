@@ -11,8 +11,8 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 web_status_t dns_callback(web_port_t port, uint32_t res_ip, web_callback_data_t *user_data);
 

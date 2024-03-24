@@ -53,6 +53,7 @@ msg_queue_t *_recursive_PushEthernetFrame(void *buffer, void *data, size_t lengt
 	}
 	if(data - sizeof(eth_frame_t) < buffer) {
 		dbg_err("Can't push ethernet frame");
+		free(buffer);
 		return NULL;
 	}
 

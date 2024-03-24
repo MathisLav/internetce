@@ -18,7 +18,7 @@
 
 
 /**
- * Private functions prototype
+ * Internal functions prototype
  */
 
 int add_tcp_queue(char *data, size_t length, tcp_exchange_t *exchange, uint16_t flags, size_t opt_size,

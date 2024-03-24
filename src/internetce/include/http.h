@@ -9,6 +9,39 @@
 #include <internet.h>
 #include <stdint.h>
 
+/**
+ * Constants
+ */
+
+#define BASIC_HTTP_REQUEST "%s %s HTTP/1.1\r\nHost: %s\r\n%s\r\n"
+#define POST_HTTP_INFO "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n%s"
+
+
+/**
+ * Enums & structs
+ */
+
+typedef struct http_exchange {
+	bool data_chunked;
+	size_t content_length;
+	size_t content_received;
+	size_t header_length;
+	size_t chunks_metadata_length;		/**< Size of all the characters encoding chunks metadata			*/
+	size_t offset_next_chunk;			/**< Offset from beggining of the next chunk						*/
+	http_data_t **data;					/**< Where to put the result										*/
+	void *buffer;						/**< Temporary buffer while receiving data							*/
+	size_t buffer_size;
+	bool keep_http_header;
+	uint32_t timeout;					/**< Timeout date, updated each time we receive an "interesting" segment */
+	web_status_t status;				/**< Set when the request is finished (successfuly or with an error) */
+	bool dirty;
+} http_exchange_t;
+
+typedef struct http_data_list {
+	char varname[9];
+	struct http_data_list *next;
+} http_data_list_t;
+
 
 /**
  * Global variable
@@ -18,8 +51,8 @@ extern http_data_list_t *http_data_list;
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 uint32_t ip_ascii_to_hex(const char *ipstr);
 

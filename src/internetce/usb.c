@@ -2,6 +2,7 @@
 
 #include "include/usb.h"
 #include "include/core.h"
+#include "include/rndis.h"
 #include "include/debug.h"
 #include "include/ethernet.h"
 
@@ -16,6 +17,7 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 			usb_ResetDevice(netinfo.device);
 			break;
 		case USB_DEVICE_ENABLED_EVENT:
+			usb_RefDevice(netinfo.device);
 			if(!(usb_GetRole() & USB_ROLE_DEVICE)) {
 				netinfo.state = STATE_USB_ENABLED;
 			} else {
@@ -26,6 +28,8 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 		case USB_DEVICE_DISABLED_EVENT:
 		case USB_DEVICE_DISCONNECTED_EVENT:
 			netinfo.state = STATE_USB_LOST;
+			usb_UnrefDevice(netinfo.device);
+			netinfo.device = NULL;
 			break;
 		default:
 			break;
@@ -36,10 +40,6 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 }
 
 web_status_t configure_usb_device() {
-	rndis_init_msg_t rndis_initmsg = {RNDIS_INIT_MSG, 24, 0, 1, 0, MAX_SEGMENT_SIZE + 110};
-	rndis_set_msg_t rndis_setpcktflt = {RNDIS_SET_MSG , 32, 4, 0x0001010e, 4, 20, 0, 0x2d};
-	usb_control_setup_t out_ctrl = {0x21, 0, 0, 0, 0};
-	usb_control_setup_t in_ctrl = {0xa1, 1, 0, 0, 256};
 	uint8_t buffer[256] = {0};  /* Allocating 256 bytes for the messages buffer, should be enough */
 	size_t len = 0;
 	size_t total_length;
@@ -48,15 +48,18 @@ web_status_t configure_usb_device() {
 
 	/* First, let's retrieve the configuration descriptor total size */
 	usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, 9, &len);
-	if(len != 9)
+	if(len != 9) {
 		return WEB_ERROR_FAILED;
+	}
 	total_length = ((usb_configuration_descriptor_t*)buffer)->wTotalLength;  /* More or less 40 bytes */
-	if(total_length > 256)
+	if(total_length > 256) {
 		return WEB_NOT_ENOUGH_MEM;
+	}
 
 	usb_GetDescriptor(netinfo.device, USB_CONFIGURATION_DESCRIPTOR, 0, buffer, total_length, &len);
-	if(len != total_length)
+	if(len != total_length) {
 		return WEB_ERROR_FAILED;
+	}
 
 	/* Iterating through all the descriptors to see if there are an rndis and cdc interfaces */
 	while(i < len) {
@@ -119,27 +122,17 @@ web_status_t configure_usb_device() {
 	}
 
 	/* Otherwise, let's goooo */
-	if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS)
+	if(usb_SetConfiguration(netinfo.device, (usb_configuration_descriptor_t*)buffer, len) != USB_SUCCESS) {
 		return WEB_ERROR_FAILED;
+	}
 
-	/************** Configuration RNDIS ************/
-	out_ctrl.wLength = 24;
-	do {
-		usb_DefaultControlTransfer(netinfo.device, &out_ctrl, &rndis_initmsg, 3, NULL);
-		usb_DefaultControlTransfer(netinfo.device, &in_ctrl, buffer, 3, &len);
-	} while(len == 0 || ((rndis_msg_t*)buffer)->MessageType != RNDIS_INIT_CMPLT);
-
-	out_ctrl.wLength = 32;
-	do {
-		usb_DefaultControlTransfer(netinfo.device, &out_ctrl, &rndis_setpcktflt, 3, NULL);
-		usb_DefaultControlTransfer(netinfo.device, &in_ctrl, buffer, 3, &len);
-	} while(len == 0 || ((rndis_msg_t*)buffer)->MessageType != RNDIS_SET_CMPLT);
+	init_rndis_exchange();
 
 	return WEB_SUCCESS;
 }
 
 web_status_t packets_callback(size_t transferred, void *data) {
-	if(transferred >= MAX_SEGMENT_SIZE + 110) {
+	if(transferred >= MAX_RNDIS_TRANSFER_SIZE) {
 		dbg_err("No memory");
 		return WEB_NOT_ENOUGH_MEM;
 	}

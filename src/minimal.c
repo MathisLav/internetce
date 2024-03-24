@@ -12,7 +12,9 @@ int main(void)
 	while(!web_Connected() && !os_GetCSC()) {
         web_WaitForEvents();
     }
+
 	// Do whatever you want
+
 	web_Cleanup();
 	return 0;
 }

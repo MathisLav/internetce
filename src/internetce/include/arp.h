@@ -10,8 +10,8 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 void fetch_arp_msg(eth_frame_t *ethernet_frame);
 

@@ -11,8 +11,8 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 web_status_t fetch_icmpv4_msg(icmpv4_echo_t *msg, size_t length, uint32_t ip_src);
 

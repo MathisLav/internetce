@@ -11,8 +11,42 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Constants
+ */
+
+/* General */
+#define DHCP_OP_REQUEST		0x01
+#define DHCP_OP_REPLY		0x02
+#define DHCP_HTYPE_MAC		0x01
+#define DHCP_HLEN_MAC		0x06
+#define DHCP_MAGIC_COOKIE	0x63538263
+
+/* DHCP Options */
+#define DHCP_OPT_TYPE_ID	53
+#define DHCP_OPT_TYPE_LEN	1
+#define DHCP_OPT_V_DISCOVER 1
+#define DHCP_OPT_V_OFFER	2
+#define DHCP_OPT_V_REQUEST	3
+#define DHCP_OPT_V_DECLINE	4
+#define DHCP_OPT_V_ACK		5
+#define DHCP_OPT_V_NAK		6
+#define DHCP_OPT_V_RELEASE	7
+
+#define DHCP_OPT_REQ_IP_ID	50
+#define DHCP_OPT_SERVER_ID	54
+#define DHCP_OPT_IP_LEN		4
+
+#define DHCP_OPT_PARAM_REQ_LIST_ID	55
+#define DHCP_OPT_SUBNET_MASK_ID	1
+#define DHCP_OPT_ROUTER_ID	3
+#define DHCP_OPT_DNS_ID		6
+
+#define DHCP_OPT_END_OPTIONS	255
+
+
+/**
+ * Internal functions prototype
+ */
 
 void dhcp_init();
 

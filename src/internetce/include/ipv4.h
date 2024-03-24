@@ -11,8 +11,8 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 msg_queue_t *_recursive_PushIPv4Packet(void *buffer, void *data, size_t length_data, uint32_t ip_dst, uint8_t protocol);
 

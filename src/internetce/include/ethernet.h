@@ -11,8 +11,8 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 msg_queue_t *_recursive_PushEthernetFrame(void *buffer, void *data, size_t length_data, uint16_t protocol);
 

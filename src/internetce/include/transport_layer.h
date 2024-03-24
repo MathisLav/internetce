@@ -11,6 +11,18 @@
 
 
 /**
+ * Enums & structs
+ */
+
+typedef struct port_list {
+	web_port_t port;
+	web_port_callback_t *callback;
+	web_callback_data_t *callback_data;
+	struct port_list *next;
+} port_list_t;
+
+
+/**
  * Global variable
  */
 
@@ -18,8 +30,8 @@ extern port_list_t *listened_ports;
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 web_status_t call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port);
 

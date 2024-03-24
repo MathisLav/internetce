@@ -11,8 +11,8 @@
 
 
 /**
- * Private functions prototype
-*/
+ * Internal functions prototype
+ */
 
 msg_queue_t *_recursive_PushUDPDatagram(void *buffer, void *data, size_t length_data, uint32_t ip_dst,
 											   web_port_t port_src, web_port_t port_dst);

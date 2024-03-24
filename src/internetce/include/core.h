@@ -12,6 +12,38 @@
 
 #define DEFAULT_MAC_ADDRESS {0xEA, 0xA5, 0x59, 0x9C, 0xC1, 0x00}
 
+#define min(x, y) (x < y ? x : y)
+
+
+/**
+ * Enums & structs
+ */
+
+/* A list of the different states of the device */
+typedef enum device_state {
+	STATE_UNKNOWN,
+	STATE_USB_CONNECTED,
+	STATE_USB_ENABLED,
+	STATE_RNDIS_INIT,
+	STATE_RNDIS_DATA_INIT,
+	STATE_DHCP_CONFIGURING,
+	STATE_NETWORK_CONFIGURED,
+	STATE_USB_LOST
+} device_state_t;
+
+typedef struct network_info {
+	usb_device_t device;
+	device_state_t state;
+	uint8_t ep_cdc_in;
+	uint8_t ep_cdc_out;
+	uint8_t ep_wc_in;
+	uint8_t router_MAC_addr[6];
+	uint8_t my_MAC_addr[6];
+	uint32_t DNS_IP_addr;
+	uint32_t IP_addr;
+	dhcp_state_t dhcp_cur_state;
+} network_info_t;
+
 
 /**
  * Exported global variables
@@ -23,7 +55,7 @@ extern msg_queue_t *send_queue;
 
 
 /**
- * Private functions prototype
+ * Internal functions prototype
  */
 
 void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_total_size, bool has_eth_header);

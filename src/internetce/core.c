@@ -9,6 +9,7 @@
 #include "include/debug.h"
 #include "include/utils.h"
 #include "include/http.h"
+#include "include/rndis.h"
 #include "include/transport_layer.h"
 
 
@@ -92,12 +93,16 @@ web_status_t web_WaitForEvents() {
 			break;  /* WEB_SUCCESS */
 		
 		case STATE_USB_ENABLED:
-			if(configure_usb_device() == WEB_SUCCESS) {
-				netinfo.state = STATE_DHCP_CONFIGURING;
-				dhcp_init();
-			} else {
+			if(configure_usb_device() != WEB_SUCCESS) {
 				netinfo.state = STATE_UNKNOWN;
+			} else {
+				netinfo.state = STATE_RNDIS_INIT;
 			}
+			break;  /* WEB_SUCCESS */
+
+		case STATE_RNDIS_DATA_INIT:
+			dhcp_init();
+			netinfo.state = STATE_DHCP_CONFIGURING;
 			break;  /* WEB_SUCCESS */
 		
 		case STATE_DHCP_CONFIGURING:
@@ -111,9 +116,9 @@ web_status_t web_WaitForEvents() {
 			}
 
 			/* Retrieving potential messages */
-			uint8_t msg_buffer[MAX_SEGMENT_SIZE + 110];  /* All the headers should take max 102B */
+			uint8_t msg_buffer[MAX_RNDIS_TRANSFER_SIZE];  /* All the headers should take max 102B */
 			usb_error_t err = usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_in), msg_buffer,
-										   MAX_SEGMENT_SIZE + 110, 0, &transferred);
+										   MAX_RNDIS_TRANSFER_SIZE, 0, &transferred);
 			if(err != USB_SUCCESS) {
 				dbg_warn("USB err: %u", err);
 				ret_val = WEB_USB_ERROR;

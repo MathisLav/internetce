@@ -1,4 +1,5 @@
 #include <internet.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 #include "include/ipv4.h"
@@ -40,6 +41,7 @@ msg_queue_t *_recursive_PushIPv4Packet(void *buffer, void *data, size_t length_d
 	static unsigned int nbpacket = 0;
 	if(data - sizeof(ipv4_packet_t) < buffer) {
 		dbg_err("Can't push IPv4 packet");
+		free(buffer);
 		return NULL;
 	}
 

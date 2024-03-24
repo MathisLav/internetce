@@ -173,6 +173,7 @@ msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t length_d
 									   uint32_t ack_number, uint16_t flags, size_t opt_size, const uint8_t *options) {
 	if(data - (sizeof(tcp_segment_t) + opt_size) < buffer) {
 		dbg_err("Can't push TCP segment");
+		free(buffer);
 		return NULL;
 	}
 
