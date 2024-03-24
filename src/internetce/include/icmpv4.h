@@ -11,6 +11,13 @@
 
 
 /**
+ * Constants
+ */
+
+#define PING_TIMEOUT        2   /* 2 seconds timeout */
+
+
+/**
  * Internal functions prototype
  */
 

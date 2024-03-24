@@ -65,19 +65,6 @@ typedef enum web_status {
 } web_status_t;
 
 /**
- * @enum device_state_t
- * A list of the different states of the device
- */
-typedef enum device_state {
-	STATE_UNKNOWN,
-	STATE_USB_CONNECTED,
-	STATE_USB_ENABLED,
-	STATE_DHCP_CONFIGURING,
-	STATE_NETWORK_CONFIGURED,
-	STATE_USB_LOST
-} device_state_t;
-
-/**
  * DHCP communication states.
  */
 typedef enum dhcp_state {
@@ -155,12 +142,20 @@ typedef web_status_t (web_dns_callback_t)(web_port_t port, uint32_t res_ip, web_
  * RNDIS messages
  */
 
-typedef struct rndis_msg {
+typedef struct rndis_ctrl_msg {
 	uint32_t MessageType;
 	uint32_t MessageLength;
 	uint32_t RequestId;
-	uint8_t data[1];
-} rndis_msg_t;
+	uint8_t data[0];
+} rndis_ctrl_msg_t;
+
+typedef struct rndis_ctrl_cmplt {
+	uint32_t MessageType;
+	uint32_t MessageLength;
+	uint32_t RequestId;
+	uint32_t Status;
+	uint8_t data[0];
+} rndis_ctrl_cmplt_t;
 
 typedef struct rndis_init_msg {
 	uint32_t MessageType;		/**< RNDIS_INIT_MSG									*/
@@ -171,6 +166,20 @@ typedef struct rndis_init_msg {
 	uint32_t MaxTransferSize;
 } rndis_init_msg_t;
 
+typedef struct rndis_init_cmplt {
+	uint32_t MessageType;		/**< RNDIS_INIT_CMPLT								*/
+	uint32_t MessageLength;		/**< 52												*/
+	uint32_t RequestId;
+	uint32_t Status;
+	uint32_t MajorVersion;
+	uint32_t MinorVersion;
+	uint32_t DeviceFlags;
+	uint32_t MaxPacketsPerTransfer;
+	uint32_t MaxTransferSize;
+	uint32_t PacketAlignmentFactor;
+	uint32_t Reserved;
+} rndis_init_cmplt_t;
+
 typedef struct rndis_set_msg {
 	uint32_t MessageType;		/**< RNDIS_INIT_MSG									*/
 	uint32_t MessageLength;		/**< 32												*/
@@ -179,8 +188,21 @@ typedef struct rndis_set_msg {
 	uint32_t InformationBufferLength;
 	uint32_t InformationBufferOffset;
 	uint32_t DeviceVcHandle;	/**< 0												*/
-	uint32_t OidValue;			/**< Oid value sent along with the message			*/
+	uint8_t OidValue[];			/**< Oid value sent along with the message			*/
 } rndis_set_msg_t;
+
+typedef struct rndis_keepalive_msg {
+	uint32_t MessageType;
+	uint32_t MessageLength;
+	uint32_t RequestId;
+} rndis_keepalive_msg_t;
+
+typedef struct rndis_keepalive_cmplt {
+	uint32_t MessageType;
+	uint32_t MessageLength;
+	uint32_t RequestId;
+	uint32_t Status;
+} rndis_keepalive_cmplt_t;
 
 typedef struct rndis_packet_msg {
 	uint32_t MessageType;		/**< RNDIS_PACKET_MSG								*/
@@ -306,26 +328,6 @@ typedef struct network_pseudo_hdr {
  * They are not aim at being used outside.
  */
 
-typedef struct network_info {
-	usb_device_t device;
-	device_state_t state;
-	uint8_t ep_cdc_in;
-	uint8_t ep_cdc_out;
-	uint8_t ep_wc_in;
-	uint8_t router_MAC_addr[6];
-	uint8_t my_MAC_addr[6];
-	uint32_t DNS_IP_addr;
-	uint32_t IP_addr;
-	dhcp_state_t dhcp_cur_state;
-} network_info_t;
-
-typedef struct port_list {
-	web_port_t port;
-	web_port_callback_t *callback;
-	web_callback_data_t *callback_data;
-	struct port_list *next;
-} port_list_t;
-
 typedef struct tcp_segment_list {
 	uint32_t relative_sn;
 	size_t pl_length;		/**< Length of the payload of the segment				*/
@@ -341,11 +343,6 @@ typedef struct msg_queue {
 	struct msg_queue *next;
 	struct msg_queue *prev;
 } msg_queue_t;
-
-typedef struct http_data_list {
-	char varname[9];
-	struct http_data_list *next;
-} http_data_list_t;
 
 typedef struct pushed_seg_list {
 	uint32_t next_rsn;					/**< Sequence number of the last byte of the segment+1	*/
@@ -378,22 +375,6 @@ typedef struct tcp_exchange {
 	web_callback_data_t *user_data;		/**< In our case, an http_exchange_t structure						*/
 } tcp_exchange_t;
 
-typedef struct http_exchange {
-	bool data_chunked;
-	size_t content_length;
-	size_t content_received;
-	size_t header_length;
-	size_t chunks_metadata_length;		/**< Size of all the characters encoding chunks metadata			*/
-	size_t offset_next_chunk;			/**< Offset from beggining of the next chunk						*/
-	http_data_t **data;					/**< Where to put the result										*/
-	void *buffer;						/**< Temporary buffer while receiving data							*/
-	size_t buffer_size;
-	bool keep_http_header;
-	uint32_t timeout;					/**< Timeout date, updated each time we receive an "interesting" segment */
-	web_status_t status;				/**< Set when the request is finished (successfuly or with an error) */
-	bool dirty;
-} http_exchange_t;
-
 typedef struct tcp_exchange_list {
 	tcp_exchange_t tcp_exch;
 	struct tcp_exchange_list *next;
@@ -404,17 +385,32 @@ typedef struct tcp_exchange_list {
  * Noticeable constants.
  */
 
-#define DEVICE				0x00
 #define WIRELESS_RNDIS_SUBCLASS		0x01
 #define WIRELESS_RNDIS_PROTOCOL		0x03
 #define MISC_RNDIS_SUBCLASS	0x04
 #define MISC_RNDIS_PROTOCOL	0x01
 
+#define CMPLT_TYPE			0x80000000
 #define RNDIS_PACKET_MSG 	0x00000001
 #define RNDIS_INIT_MSG		0x00000002
 #define RNDIS_INIT_CMPLT	0x80000002
+#define RNDIS_HALT_MSG		0x00000003
+#define RNDIS_QUERY_MSG		0x00000004
+#define RNDIS_QUERY_CMPLT	0x80000004
 #define RNDIS_SET_MSG		0x00000005
 #define RNDIS_SET_CMPLT		0x80000005
+#define RNDIS_RESET_MSG		0x00000006
+#define RNDIS_RESET_CMPLT	0x80000006
+#define RNDIS_INDICATE_MSG	0x00000007
+#define RNDIS_KEEPALIVE_MSG	0x00000008
+#define RNDIS_KEEPALIVE_CMPLT	0x80000008
+
+#define RNDIS_STATUS_SUCCESS        0x00000000
+#define RNDIS_STATUS_FAILURE        0xC0000001
+#define RNDIS_STATUS_INVALID_DATA   0xC0010015
+#define RNDIS_STATUS_NOT_SUPPORTED  0xC00000BB
+#define RNDIS_STATUS_MEDIA_CONNECT  0x4001000B
+#define RNDIS_STATUS_MEDIA_DISCONNECT   0x4001000C
 
 #define SEND_EVERY			2			/**< Hardcoded value but in theory this should be calculated		*/
 #define TIMEOUT_WEB			30			/**< Maximum time of a web request (HTTP, DNS...)					*/
@@ -455,42 +451,10 @@ typedef struct tcp_exchange_list {
 #define FLAG_TCP_URG		1 << 5
 #define FLAG_TCP_MASK		(FLAG_TCP_FIN|FLAG_TCP_SYN|FLAG_TCP_RST|FLAG_TCP_PSH|FLAG_TCP_ACK|FLAG_TCP_URG)
 
-/**
- * DHCP General Constants
- */
-#define DHCP_OP_REQUEST		0x01
-#define DHCP_OP_REPLY		0x02
-#define DHCP_HTYPE_MAC		0x01
-#define DHCP_HLEN_MAC		0x06
-#define DHCP_MAGIC_COOKIE	0x63538263
 
 /**
- * DHCP Options
+ * Public functions
  */
-#define DHCP_OPT_TYPE_ID	53
-#define DHCP_OPT_TYPE_LEN	1
-#define DHCP_OPT_V_DISCOVER 1
-#define DHCP_OPT_V_OFFER	2
-#define DHCP_OPT_V_REQUEST	3
-#define DHCP_OPT_V_DECLINE	4
-#define DHCP_OPT_V_ACK		5
-#define DHCP_OPT_V_NAK		6
-#define DHCP_OPT_V_RELEASE	7
-
-#define DHCP_OPT_REQ_IP_ID	50
-#define DHCP_OPT_SERVER_ID	54
-#define DHCP_OPT_IP_LEN		4
-
-#define DHCP_OPT_PARAM_REQ_LIST_ID	55
-#define DHCP_OPT_SUBNET_MASK_ID	1
-#define DHCP_OPT_ROUTER_ID	3
-#define DHCP_OPT_DNS_ID		6
-
-#define DHCP_OPT_END_OPTIONS	255
-
-#define BASIC_HTTP_REQUEST "%s %s HTTP/1.1\r\nHost: %s\r\n%s\r\n"
-#define POST_HTTP_INFO "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n%s"
-
 
 /**
  *	@brief	Initialize the library.
@@ -568,28 +532,28 @@ uint32_t web_SendDNSRequest(const char *url);
 dns_exchange_t *web_PushDNSRequest(const char *url, web_dns_callback_t *callback, web_callback_data_t *user_data);
 
 /**
- * 
- */
-msg_queue_t *web_PushDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip);
-
-/**
- * 
- */
-web_status_t web_SendDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip);
-
-/**
- * 
+ * @brief  Connect the device to the specified \c ip_dst:port_dst. All messages received from this address will be
+ * 		   passed to \c callback.
+ * @note   This function blocks until the TCP handshake is completed.
+ * @param  ip_dst The target IPv4 address.
+ * @param  port_dst The target port number.
+ * @param  callback The function you want to be called when a message is received from the host.
+ * @param  user_data Pointer passed to your callback
+ * @returns A \c tcp_exchange_t structure or \c NULL. You'll have to pass this structure to other TCP functions such as
+ * 			\c web_DeliverTCPSegment.
  */
 tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_callback_t *callback,
 							   web_callback_data_t *user_data);
 
 /**
- * 
+ * @brief  Close a TCP connection.
+ * @note   The \c tcp_exchange_t structure can't be used after calling this function.
+ * @param  tcp_exch The \c tcp_exchange_t structure returned by \c web_TCPConnect.
  */
 void web_TCPClose(tcp_exchange_t *tcp_exch);
 
 /**
- *  @brief	Deliver a TCP segment to the host connected to tcp_exchange.
+ *  @brief	Deliver a TCP segment to the host connected to \c tcp_exch.
  * 	@note	The function insures the correct delivery of the segment with a system of acknowledgement.
  * 	@param	tcp_exch The TCP exchange structure, returned by web_TCPConnect.
  * 	@param	data The data that must be delivered.
@@ -676,12 +640,22 @@ msg_queue_t *web_PushUDPDatagram(void *data, size_t length_data, uint32_t ip_dst
 								 web_port_t port_dst);
 
 /**
- * 
+ * @brief  Ping a foreign host.
+ * @note   This function blocks until a response is received or until the timeout is reached (2 seconds).
+ * @param  ip_dst The target IPv4.
+ * @return \c WEB_SUCCESS if a response has been received, \c WEB_TIMEOUT if no response were received in 2 seconds and
+ * 		   \c WEB_ERROR_FAILED for other errors.
  */
-web_status_t web_SendICMPEchoRequest(uint32_t ip_dst);
+web_status_t web_Ping(uint32_t ip_dst);
 
 /**
- * 
+ *	@brief	Schedules the delivery of an IPv4 packet.
+ *	@note	Use \c web_WaitForEvents() to actually send the IPv4 packet.
+ *	@param	data The data that must be encapsulated in the IPv4 header.
+ *	@param	length_data The length of the data encapsulated.
+ *	@param	ip_dst The target IP address.
+ *	@param  protocol The IPv4 protocol hint of the encapsulated data.
+ *	@returns \c WEB_SUCESS or an error.
  */
 web_status_t web_SendIPv4Packet(void *data, size_t length_data, uint32_t ip_dst, uint8_t protocol);
 
@@ -692,13 +666,18 @@ web_status_t web_SendIPv4Packet(void *data, size_t length_data, uint32_t ip_dst,
  *	@param	data The data that must be encapsulated in the IPv4 header.
  *	@param	length_data The length of the encapsulated data.
  *	@param	ip_dst The target IP address.
- *	@param	protocol The protocol of the encapsulated data (ICMP_PROTOCOL, TCP_PROTOCOL or UDP_PROTOCOL).
+ *	@param	protocol The IPv4 protocol hint of the encapsulated data.
  *	@returns A structure that must be passed to \c web_popMessage() once a response has been received.
  */
 msg_queue_t *web_PushIPv4Packet(void *data, size_t length_data, uint32_t ip_dst, uint8_t protocol);
 
 /**
- * 
+ *	@brief	Schedules the delivery of an Ethernet frame.
+ *	@note	Use \c web_WaitForEvents() to actually send the Ethernet frame.
+ *	@param	data The data that must be encapsulated in the ethernet frame.
+ *	@param	length_data The length of the data encapsulated.
+ *	@param  protocol The ethernet protocol hint of the encapsulated data.
+ *	@returns \c WEB_SUCESS or an error.
  */
 web_status_t web_SendEthernetFrame(void *data, size_t length_data, uint16_t protocol);
 
@@ -708,7 +687,7 @@ web_status_t web_SendEthernetFrame(void *data, size_t length_data, uint16_t prot
  *	@note	Use \c web_WaitForEvents() to actually send the frame.
  *	@param	data The data that must be encapsulated in the ethernet header.
  *	@param	length_data The length of the encapsulated data.
- *	@param	protocol The encapsulated protocol (ETH_ARP, ETH_IPV4, ...).
+*	@param  protocol The ethernet protocol hint of the encapsulated data.
  *	@returns A structure that must be passed to \c web_popMessage() once a response has been received.
  */
 msg_queue_t *web_PushEthernetFrame(void *data, size_t length_data, uint16_t protocol);
