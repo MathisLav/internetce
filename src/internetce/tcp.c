@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "include/tcp.h"
 #include "include/core.h"
@@ -35,7 +36,7 @@ web_status_t web_SendRawTCPSegment(void *data, size_t length_data, uint32_t ip_d
 	msg_queue_t *queued = web_PushRawTCPSegment(data, length_data, ip_dst, port_src, port_dst, seq_number, ack_number,
 											 	flags, opt_size, options);
 	if(queued != NULL) {
-		queued->waitingTime = 0;  /* Send once */
+		queued->send_once = true;  /* Send once */
 	}
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
@@ -56,7 +57,7 @@ web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, char *data, size_t 
 		/* The next ack number will be incremented */
 		tcp_exch->cur_sn++;
 	} else if(length == 0) {
-		queued->waitingTime = 0;  /* no data & flags != SF -> Send once (e.g RST or simple ACK segment) */
+		queued->send_once = true;  /* no data & flags != SF -> Send once (e.g RST or simple ACK segment) */
 		return WEB_SUCCESS;
 	}
 	pushed_seg_list_t *new_seg = malloc(sizeof(pushed_seg_list_t));
@@ -162,7 +163,7 @@ void fetch_ack(tcp_exchange_t *tcp_exch, uint32_t ackn) {
 	pushed_seg_list_t *next_seg = NULL;
 	while(cur_seg) {
 		next_seg = cur_seg->next;
-		web_popMessage(cur_seg->seg);
+		web_PopMessage(cur_seg->seg);
 		free(cur_seg);
 		cur_seg = next_seg;
 	}
@@ -244,7 +245,7 @@ void wipe_tcp_echange(tcp_exchange_t *tcp_exch) {
 	pushed_seg_list_t *next_pushed = NULL;
 	while(cur_pushed) {
 		next_pushed = cur_pushed->next;
-		web_popMessage(cur_pushed->seg);
+		web_PopMessage(cur_pushed->seg);
 		free(cur_pushed);
 		cur_pushed = next_pushed;
 	}

@@ -1,5 +1,6 @@
 #include <internet.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "include/debug.h"
 #include "include/core.h"
@@ -17,11 +18,14 @@ void debug(const void *addr, size_t len) {
 	printf("\n");
 }
 
-void printf_xy(unsigned int xpos, unsigned int ypos, const char *txt) {
+void printf_xy(unsigned int xpos, unsigned int ypos, const char *format, ...) {
 	unsigned int x, y;
 	os_GetCursorPos(&x, &y);
 	os_SetCursorPos(xpos, ypos);
-	printf("%s ", txt);
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
 	os_SetCursorPos(x, y);
 }
 

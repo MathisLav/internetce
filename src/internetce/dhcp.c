@@ -1,24 +1,27 @@
 #include <internet.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "include/dhcp.h"
 #include "include/core.h"
 #include "include/debug.h"
 
 
-/**
- * Static variable (only this file has access to it)
- */
+/**********************************************************************************************************************\
+ *                                                  Global Variables                                                  *
+\**********************************************************************************************************************/
 
 static msg_queue_t *dhcp_last_msg_queue = NULL;
 
 
 /**********************************************************************************************************************\
- *                                                  Public functions                                                  *
+ *                                                  Private functions                                                 *
 \**********************************************************************************************************************/
 
-msg_queue_t *web_PushDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip) {
+/* Note: This file has only internal functions */
+
+msg_queue_t *push_dhcp_message(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip) {
 	static uint32_t xid = 0;
 	if(xid == 0) {  /* If not initialized yet */
 		xid = random();
@@ -43,24 +46,11 @@ msg_queue_t *web_PushDHCPMessage(size_t opt_size, const uint8_t *options, uint32
 							   SERVER_DHCP_PORT);
 }
 
-web_status_t web_SendDHCPMessage(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip) {
-	msg_queue_t *queued = web_PushDHCPMessage(opt_size, options, dhcp_server_ip);
-	if(queued != NULL) {
-		queued->waitingTime = 0;  /* Send once */
-	}
-	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
-}
-
-
-/**********************************************************************************************************************\
- *                                                  Private functions                                                 *
-\**********************************************************************************************************************/
-
 void dhcp_init() {
 	const uint8_t options_disc[] = {
 		DHCP_OPT_TYPE_ID, DHCP_OPT_TYPE_LEN, DHCP_OPT_V_DISCOVER,
 		DHCP_OPT_END_OPTIONS};
-	dhcp_last_msg_queue = web_PushDHCPMessage(sizeof(options_disc), options_disc, 0x00);
+	dhcp_last_msg_queue = push_dhcp_message(sizeof(options_disc), options_disc, 0x00);
 	web_ListenPort(CLIENT_DHCP_PORT, fetch_dhcp_msg, NULL);
 	netinfo.dhcp_cur_state = DHCP_STATE_INIT;
 }
@@ -80,7 +70,7 @@ web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 				case DHCP_OPT_TYPE_ID:
 					if(cur_opt[2] == DHCP_OPT_V_OFFER && netinfo.dhcp_cur_state == DHCP_STATE_INIT) {
 						if(dhcp_last_msg_queue != NULL) {
-							web_popMessage(dhcp_last_msg_queue);
+							web_PopMessage(dhcp_last_msg_queue);
 						}
 						uint8_t options_req[] = {
 							DHCP_OPT_TYPE_ID, DHCP_OPT_TYPE_LEN, DHCP_OPT_V_REQUEST,
@@ -91,13 +81,13 @@ web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 
 						*(uint32_t *)(options_req + 8) = dhcp_msg->siaddr;
 						*(uint32_t *)(options_req + 14) = dhcp_msg->yiaddr;
-						dhcp_last_msg_queue = web_PushDHCPMessage(sizeof(options_req), options_req, dhcp_msg->siaddr);
+						dhcp_last_msg_queue = push_dhcp_message(sizeof(options_req), options_req, dhcp_msg->siaddr);
 						if(dhcp_last_msg_queue != NULL) {
 							netinfo.dhcp_cur_state = DHCP_STATE_SELECTING;
 						}
 					} else if(cur_opt[2] == DHCP_OPT_V_ACK && netinfo.dhcp_cur_state == DHCP_STATE_SELECTING) {
 						if(dhcp_last_msg_queue != NULL) {
-							web_popMessage(dhcp_last_msg_queue);
+							web_PopMessage(dhcp_last_msg_queue);
 							dhcp_last_msg_queue = NULL;
 						}
 						netinfo.IP_addr = dhcp_msg->yiaddr;
@@ -107,7 +97,7 @@ web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 					} else if(cur_opt[2] == DHCP_OPT_V_NAK && netinfo.dhcp_cur_state == DHCP_STATE_SELECTING) {
 						dbg_warn("DHCP NACK");
 						if(dhcp_last_msg_queue != NULL) {
-							web_popMessage(dhcp_last_msg_queue);
+							web_PopMessage(dhcp_last_msg_queue);
 							dhcp_last_msg_queue = NULL;
 						}
 						web_UnlistenPort(CLIENT_DHCP_PORT);

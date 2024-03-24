@@ -51,7 +51,6 @@ typedef struct network_info {
 
 extern network_info_t netinfo;
 extern uint8_t *src_mac_addr; /* For dhcp purposes (we need to acknowledge the router's mac address) */
-extern msg_queue_t *send_queue;
 
 
 /**
@@ -60,7 +59,9 @@ extern msg_queue_t *send_queue;
 
 void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_total_size, bool has_eth_header);
 
-web_status_t handle_send_msg_queue();
+web_status_t send_packet_scheduler(web_callback_data_t *user_data);
+
+void send_packet_destructor(web_callback_data_t *user_data);
 
 inline uint32_t htonl(uint32_t val) {
 	uint8_t *pval = (uint8_t *)&val;

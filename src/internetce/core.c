@@ -1,6 +1,7 @@
 #include <internet.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "include/core.h"
 #include "include/usb.h"
@@ -10,6 +11,7 @@
 #include "include/utils.h"
 #include "include/http.h"
 #include "include/rndis.h"
+#include "include/scheduler.h"
 #include "include/transport_layer.h"
 
 
@@ -19,7 +21,7 @@
 
 network_info_t netinfo;
 uint8_t *src_mac_addr;
-msg_queue_t *send_queue = NULL;
+static void *msg_buffer = NULL;
 
 
 /**********************************************************************************************************************\
@@ -53,13 +55,7 @@ void web_Cleanup() {
 	}
 
 	/* Freeing send_queue */
-	msg_queue_t *cur_queue = send_queue;
-	msg_queue_t *next_queue = NULL;
-	while(cur_queue) {
-		next_queue = cur_queue->next;
-		web_popMessage(cur_queue);
-		cur_queue = next_queue;
-	}
+	flush_event_list();
 
 	/* Freeing the appvars used for saving what the lib receives */
 	http_data_list_t *cur_data = http_data_list;
@@ -83,7 +79,6 @@ bool web_Connected() {
 }
 
 web_status_t web_WaitForEvents() {
-	size_t transferred = 0;
 	web_status_t ret_val = WEB_SUCCESS;
 
 	switch(netinfo.state) {
@@ -110,27 +105,23 @@ web_status_t web_WaitForEvents() {
 			/* Close TCP connections after a timeout */
 			handle_tcp_connections();
 
-			/* Sending messages in the queue */
-			if(handle_send_msg_queue() != WEB_SUCCESS) {
-				return WEB_USB_ERROR;  /* At least one message couldn't be sent through USB */
-			}
-
 			/* Retrieving potential messages */
-			uint8_t msg_buffer[MAX_RNDIS_TRANSFER_SIZE];  /* All the headers should take max 102B */
-			usb_error_t err = usb_Transfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_in), msg_buffer,
-										   MAX_RNDIS_TRANSFER_SIZE, 0, &transferred);
-			if(err != USB_SUCCESS) {
-				dbg_warn("USB err: %u", err);
-				ret_val = WEB_USB_ERROR;
-			} else if(transferred != 0) {
-				ret_val = packets_callback(transferred, msg_buffer);
-			} else {
-				ret_val = WEB_NO_DATA;
+			if(msg_buffer == NULL) {
+				msg_buffer = malloc(MAX_RNDIS_TRANSFER_SIZE);  /* All the headers should take max 102B */
+				usb_error_t err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_in),
+													   msg_buffer, MAX_RNDIS_TRANSFER_SIZE, packets_callback, &msg_buffer);
+				if(err != USB_SUCCESS) {
+					dbg_warn("USB err: %u", err);
+					ret_val = WEB_USB_ERROR;
+				}
 			}
 
 		} default:
 			break; /* nothing */
 	}
+
+	/* Handling time events */
+	dispatch_time_events();
 
 	/* Handling USB events */
 	usb_error_t err = usb_HandleEvents();
@@ -149,26 +140,14 @@ msg_queue_t *web_PushMessage(void *msg, size_t length) {
 	}
 	new_msg->length = length;
 	new_msg->msg = msg;
-	new_msg->waitingTime = rtc_Time();
+	new_msg->send_once = false;  // Modified in upper layers if needed
 	new_msg->endpoint = usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_out);
-	new_msg->prev = NULL;
-	new_msg->next = send_queue;
-	if(send_queue) {
-		send_queue->prev = new_msg;
-	}
-	send_queue = new_msg;
+	schedule(SEND_EVERY, send_packet_scheduler, send_packet_destructor, new_msg);
 	return new_msg;
 }
 
-void web_popMessage(msg_queue_t *msg) {
-	if(msg->prev)
-		msg->prev->next = msg->next;
-	else
-		send_queue = msg->next;
-	if(msg->next)
-		msg->next->prev = NULL;
-	free(msg->msg);
-	free(msg);
+inline void web_PopMessage(msg_queue_t *msg) {
+	remove_event(msg);
 }
 
 
@@ -187,29 +166,23 @@ void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_total_siz
 	return buffer;
 }
 
-web_status_t handle_send_msg_queue() {
-	// TODO send the messages as a queue, and not as a stack (FIFO)
-	const uint32_t current_time = rtc_Time();
-	msg_queue_t *cur_msg = send_queue;
-	while(cur_msg) {
-		if(cur_msg->waitingTime == 0) {  /* send once */
-			msg_queue_t *remove_queue = cur_msg;
-			if(usb_Transfer(cur_msg->endpoint, cur_msg->msg, cur_msg->length, 0, NULL) != USB_SUCCESS) {
-				dbg_warn("Failed to send packet");
-				return WEB_ERROR_FAILED;
-			}
-			cur_msg = cur_msg->next;
-			web_popMessage(remove_queue);
-		} else if(cur_msg->waitingTime <= current_time) {
-			cur_msg->waitingTime = current_time + SEND_EVERY;
-			if(usb_Transfer(cur_msg->endpoint, cur_msg->msg, cur_msg->length, 0, NULL) != USB_SUCCESS) {
-				dbg_warn("Failed to send packet");
-				return WEB_ERROR_FAILED;
-			}
-			cur_msg = cur_msg->next;
-		} else {
-			cur_msg = cur_msg->next;
-		}
+web_status_t send_packet_scheduler(web_callback_data_t *user_data) {
+	msg_queue_t *cur_msg = (msg_queue_t *)user_data;
+
+	if(usb_Transfer(cur_msg->endpoint, cur_msg->msg, cur_msg->length, 0, NULL) != USB_SUCCESS) {
+		dbg_warn("Failed to send packet");
+		return WEB_ERROR_FAILED;
 	}
+
+	if(cur_msg->send_once) {
+		remove_event(user_data);
+	}
+
 	return WEB_SUCCESS;
+}
+
+void send_packet_destructor(web_callback_data_t *user_data) {
+	msg_queue_t *msg = (msg_queue_t *)user_data;
+	free(msg->msg);
+	free(msg);
 }

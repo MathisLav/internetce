@@ -18,7 +18,7 @@ uint32_t web_SendDNSRequest(const char *url) {
 		while(!res_ip) {
 			web_WaitForEvents();
 			if(timeout <= rtc_Time()) {
-				web_popMessage(dns_exch->queued_request);
+				web_PopMessage(dns_exch->queued_request);
 				web_UnlistenPort(dns_exch->port_src);
 				free(dns_exch);
 				return 0xffffffff;
@@ -93,7 +93,7 @@ web_status_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 		return WEB_SUCCESS;
 
 	dns_exchange_t *exch = (dns_exchange_t *)user_data;
-	web_popMessage(exch->queued_request);
+	web_PopMessage(exch->queued_request);
 	web_UnlistenPort(port);
 
 	const udp_datagram_t *udp_dtgm = (udp_datagram_t *)msg;

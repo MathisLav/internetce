@@ -1,6 +1,7 @@
 #include <internet.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "include/ipv4.h"
 #include "include/core.h"
@@ -27,7 +28,7 @@ msg_queue_t *web_PushIPv4Packet(void *data, size_t length_data, uint32_t ip_dst,
 web_status_t web_SendIPv4Packet(void *data, size_t length_data, uint32_t ip_dst, uint8_t protocol) {
 	msg_queue_t *queued = web_PushIPv4Packet(data, length_data, ip_dst, protocol);
 	if(queued != NULL) {
-		queued->waitingTime = 0;  /* Send once */
+		queued->send_once = true;  /* Send once */
 	}
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }

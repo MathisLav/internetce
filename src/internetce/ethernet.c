@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "include/ethernet.h"
 #include "include/core.h"
@@ -26,7 +27,7 @@ msg_queue_t *web_PushEthernetFrame(void *data, size_t length_data, uint16_t prot
 web_status_t web_SendEthernetFrame(void *data, size_t length_data, uint16_t protocol) {
 	msg_queue_t *queued = web_PushEthernetFrame(data, length_data, protocol);
 	if(queued != NULL) {
-		queued->waitingTime = 0;  /* Send once */
+		queued->send_once = true;  /* Send once */
 	}
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }

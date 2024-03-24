@@ -1,4 +1,6 @@
 #include <internet.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 #include "include/usb.h"
 #include "include/core.h"
@@ -131,20 +133,35 @@ web_status_t configure_usb_device() {
 	return WEB_SUCCESS;
 }
 
-web_status_t packets_callback(size_t transferred, void *data) {
-	if(transferred >= MAX_RNDIS_TRANSFER_SIZE) {
-		dbg_err("No memory");
-		return WEB_NOT_ENOUGH_MEM;
+usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
+							 usb_transfer_data_t *data) {
+	(void)endpoint;  /* Unused parameter */
+
+	void *packet = *(void **)data;
+	*(void **)data = NULL;
+
+	if(status & USB_ERROR_NO_DEVICE) {
+		dbg_warn("Lost connection (pckt)");
+		netinfo.state = STATE_USB_LOST;
+		free(packet);
+		return USB_ERROR_FAILED;
+	} else if(status != USB_SUCCESS) {
+		dbg_warn("Packet callback returned %u", status);
+		free(packet);
+		return USB_SUCCESS;
 	}
+
 	/* Several messages can be queued in the same transfer */
-	void *cur_packet = data;
-	while(cur_packet < data + transferred) {
-		eth_frame_t *frame = (eth_frame_t *)(data + sizeof(rndis_packet_msg_t));
+	void *cur_packet = packet;
+	while(cur_packet < packet + transferred) {
+		eth_frame_t *frame = (eth_frame_t *)(cur_packet + sizeof(rndis_packet_msg_t));
 		web_status_t ret_status = fetch_ethernet_frame(frame, ((rndis_packet_msg_t *)cur_packet)->DataLength);
 		if(ret_status != WEB_SUCCESS) {
-			return ret_status;
+			return USB_ERROR_FAILED;
 		}
 		cur_packet = cur_packet + sizeof(rndis_packet_msg_t) + ((rndis_packet_msg_t *)cur_packet)->DataLength;
 	}
-	return WEB_SUCCESS;
+
+	free(packet);
+	return USB_SUCCESS;
 }

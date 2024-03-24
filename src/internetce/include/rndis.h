@@ -14,7 +14,11 @@
  * Constants
  */
 
+#define RNDIS_CONTROL_BUFFER			64  /* 64 should be enough */
+
 #define MAX_RNDIS_TRANSFER_SIZE 		MAX_SEGMENT_SIZE + TCP_HEADERS_SIZE  // 1562B
+
+#define SEND_KEEPALIVE_INTERVAL			5 * 1000  /* Send Keepalive every 5 seconds according to RNDIS requirements */
 
 /* RNDIS version */
 #define RNDIS_MAJOR_VERSION				0x01
@@ -22,6 +26,10 @@
 
 /* Device flag */
 #define RNDIS_DF_CONNECTIONLESS			0x01
+#define RNDIS_DF_CONNECTION_ORIENTED	0x02
+
+/* Medium */
+#define RNDIS_MEDIUM_802_3				0x00000000
 
 /* General OIDs */
 #define OID_GEN_SUPPORTED_LIST			0x00010101
@@ -77,6 +85,7 @@ typedef struct rndis_state {
 	unsigned int cur_request_id;        /* Current request ID */
 	bool has_keepalive_cmplt_received;  /* Check that the previous keepalive message got a response */
     uint8_t interrupt_buffer[8];        /* Where to store the response in the interrupt endpoint */
+	usb_control_setup_t ctrl_setup_buffer;
 	size_t max_transfer_size;			/* Max RNDIS message size. The minimum value bewteen host & device's is chosen */
 } rndis_state_t;
 
@@ -88,6 +97,9 @@ typedef struct rndis_state {
 msg_queue_t *_recursive_PushRNDISPacket(void *buffer, void *data, size_t length_data);
 
 void send_control_rndis(void *rndis_msg, size_t length);
+
+usb_error_t out_control_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
+							  		   usb_transfer_data_t *data);
 
 void init_rndis_exchange();
 
@@ -102,7 +114,12 @@ void send_rndis_reset_msg();
 usb_error_t interrupt_handler(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
 							  usb_transfer_data_t *data);
 
-usb_error_t ctrl_rndis_callback(size_t transferred, void *data);
+usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
+								usb_transfer_data_t *data);
+
+void poll_interrupt_scheduler();
+
+web_status_t send_keepalive_scheduler(web_callback_data_t *user_data);
 
 
 #endif // INTERNET_RNDIS

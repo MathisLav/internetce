@@ -4,6 +4,7 @@
 
 
 #include <internet.h>
+#include <tice.h>
 
 
 int main(void)

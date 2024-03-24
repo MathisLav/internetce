@@ -1,6 +1,7 @@
 #include <internet.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "include/udp.h"
 #include "include/core.h"
@@ -26,7 +27,7 @@ web_status_t web_SendUDPDatagram(void *data, size_t length_data, uint32_t ip_dst
 								 web_port_t port_dst) {
 	msg_queue_t *queued = web_PushUDPDatagram(data, length_data, ip_dst, port_src, port_dst);
 	if(queued != NULL) {
-		queued->waitingTime = 0;  /* Send once */
+		queued->send_once = true;  /* Send once */
 	}
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
