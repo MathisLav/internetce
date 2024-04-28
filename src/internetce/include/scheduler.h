@@ -43,11 +43,18 @@ web_status_t dispatch_time_events();
 void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
               web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data);
 
+void delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
+                 web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data);
+
 web_status_t remove_event(web_callback_data_t *user_data);
 
 void flush_event_list();
 
 void reset_event(web_callback_data_t *user_data);
+
+web_status_t boolean_scheduler(web_callback_data_t *user_data);
+
+void boolean_destructor(web_callback_data_t *user_data);
 
 
 #endif // INTERNET_SCHEDULER

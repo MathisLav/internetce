@@ -39,17 +39,17 @@ void web_UnlistenPort(web_port_t port) {
 	while(cur_port) {
 		next_port = cur_port->next;
 		if(cur_port->port == port) {
-			if(prev_port)
+			if(prev_port) {
 				prev_port->next = cur_port->next;
-			else
+			} else {
 				listened_ports = cur_port->next;
+			}
 			free(cur_port);
 		}
 		prev_port = cur_port;
 		cur_port = next_port;
 	}
 }
-
 
 /**********************************************************************************************************************\
  *                                                  Private functions                                                 *

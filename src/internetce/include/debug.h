@@ -15,7 +15,7 @@
 /**
  * Change this define to make the lib more or less verbose
  */
-#define DEBUG_LEVEL NO_DEBUG
+#define DEBUG_LEVEL DEBUG_INFO
 
 
 #if DEBUG_LEVEL == NO_DEBUG

@@ -11,6 +11,7 @@
 #include "include/utils.h"
 #include "include/tcp.h"
 #include "include/core.h"
+#include "include/scheduler.h"
 
 
 http_data_list_t *http_data_list = NULL;
@@ -188,16 +189,17 @@ web_status_t http_request(const char *request_type, const char* url, http_data_t
 	/* Configuring request information */
 	http_exchange_t *http_exch = malloc(sizeof(http_exchange_t));
 	memset(http_exch, 0, sizeof(http_exchange_t));
-	http_exch->buffer_size = 536;  /* Common payload size for network exchanges */
+	http_exch->buffer_size = 536;  /* Starting size, will be resized later */
 	http_exch->data = data;
 	http_exch->buffer = malloc(http_exch->buffer_size);
 	http_exch->keep_http_header = keep_http_header;
-    http_exch->timeout = rtc_Time() + TIMEOUT_WEB;
+    http_exch->timeout = false;
     tcp_exchange_t *tcp_exch = web_TCPConnect(ip, HTTP_PORT, fetch_http_msg, http_exch);
     if(tcp_exch == NULL) {
 		free(http_exch);
 		return WEB_TIMEOUT;
 	}
+	delay_event(TIMEOUT_HTTP * 1000, boolean_scheduler, boolean_destructor, &http_exch->timeout);
 
 	/* Building HTTP request */
 	uint24_t length = (strlen(BASIC_HTTP_REQUEST) - (4 * 2) /* 4 '%s' options */ + strlen(request_type) +
@@ -213,12 +215,13 @@ web_status_t http_request(const char *request_type, const char* url, http_data_t
 	/* Waiting for the end of the request */
 	while(!http_exch->dirty) {
 		web_WaitForEvents();
-		if(http_exch->timeout <= rtc_Time()) {
+		if(http_exch->timeout) {
 			http_exch->dirty = true;
 			http_exch->status = WEB_TIMEOUT;
 			dbg_err("Timeout");
 		}
 	}
+	remove_event(&http_exch->timeout);
 
 	const web_status_t ret_status = http_exch->status;
 	if(http_exch->buffer != NULL) {

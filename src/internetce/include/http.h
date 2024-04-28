@@ -32,7 +32,7 @@ typedef struct http_exchange {
 	void *buffer;						/**< Temporary buffer while receiving data							*/
 	size_t buffer_size;
 	bool keep_http_header;
-	uint32_t timeout;					/**< Timeout date, updated each time we receive an "interesting" segment */
+	bool timeout;
 	web_status_t status;				/**< Set when the request is finished (successfuly or with an error) */
 	bool dirty;
 } http_exchange_t;

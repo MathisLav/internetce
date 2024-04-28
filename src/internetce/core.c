@@ -102,9 +102,6 @@ web_status_t web_WaitForEvents() {
 		
 		case STATE_DHCP_CONFIGURING:
 		case STATE_NETWORK_CONFIGURED: {
-			/* Close TCP connections after a timeout */
-			handle_tcp_connections();
-
 			/* Retrieving potential messages */
 			if(msg_buffer == NULL) {
 				msg_buffer = malloc(MAX_RNDIS_TRANSFER_SIZE);  /* All the headers should take max 102B */

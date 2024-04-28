@@ -10,6 +10,8 @@
 #include "include/transport_layer.h"
 #include "include/http.h"
 #include "include/ipv4.h"
+#include "include/scheduler.h"
+
 
 tcp_exchange_list_t *tcp_exchanges = NULL;
 
@@ -91,15 +93,20 @@ tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_ca
 	web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_SYN, sizeof(options), options);
 
 	/* Blocking until it receives an SYN/ACK */
-	const uint32_t timeout_date = rtc_Time() + TIMEOUT_TCP;
+	bool is_timeout = false;
+	delay_event(TIMEOUT_NET * 1000, boolean_scheduler, boolean_destructor, &is_timeout);
 	while(tcp_exch->tcp_state != TCP_STATE_ESTABLISHED) {
 		web_WaitForEvents();
-		if(rtc_Time() >= timeout_date) {
+		if(is_timeout) {
 			web_UnlistenPort(tcp_exch->port_src);
+			if(tcp_exch->out_segments != NULL) {  /* Removing the SYN segment */
+				free(tcp_exch->out_segments);
+			}
 			free(tcp_exch);
 			return NULL;
 		}
 	}
+	remove_event(&is_timeout);
 	
 	return tcp_exch;
 }
@@ -200,34 +207,17 @@ msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t length_d
 	return _recursive_PushIPv4Packet(buffer, tcp_seg, size_all, ip_dst, TCP_PROTOCOL);
 }
 
-void handle_tcp_connections() {
-	const uint32_t current_time = rtc_Time();
-	tcp_exchange_list_t *cur_connection = tcp_exchanges;
-	tcp_exchange_list_t *prev_connection = NULL;
-	while(cur_connection != NULL) {
-		tcp_exchange_t *tcp_exch = &cur_connection->tcp_exch;
-		if((tcp_exch->tcp_state == TCP_STATE_TIME_WAIT && current_time >= tcp_exch->timeout_close)
-		   || tcp_exch->dirty) {
-			if(prev_connection == NULL) {
-				tcp_exchanges = cur_connection->next;
-			} else {
-				prev_connection->next = cur_connection->next;
-			}
-		}
-		prev_connection = cur_connection;
-		cur_connection = cur_connection->next;
-	}
+web_status_t time_wait_scheduler(web_callback_data_t *user_data) {
+	(void)user_data;  /* Unsed parameter */
+	/*
+		No Operation.
+		Everything is done in the destructor, so the flush_event_list function frees all data structures too.
+	*/
+	return WEB_SUCCESS;
 }
 
-void wipe_tcp_echange(tcp_exchange_t *tcp_exch) {
-    /* For now, a TCP connection is always an HTTP communication */
-    // wipe_http_exchange(tcp_exch->app_data);
-
-	/* If the connection terminated unexpectedly */
-	if(tcp_exch->tcp_state == TCP_STATE_ESTABLISHED) {
-		dbg_warn("Sending RST segment");
-		web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_RST, 0, NULL);
-	}
+void time_wait_destructor(web_callback_data_t *user_data) {
+	tcp_exchange_t *tcp_exch = (tcp_exchange_t *)user_data;
 	dbg_info("Freeing connection %x", tcp_exch->port_src);
 
     /* Free the received segments */
@@ -349,25 +339,17 @@ web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, 
 		fetch_tcp_flags(data, tcp_exch, payload_size != 0);  /* Sends an ACK if needed */
 
 		/* Sending to the application the reordered list of payloads */
-		if(tcp_exch->in_segments->relative_sn != 0) {  /* Not received the first segment yet */
-			return WEB_SUCCESS;
-		}
-		tcp_segment_list_t *prev_seg = tcp_exch->last_in_acked;
-		tcp_segment_list_t *cur_seg;
-		if(prev_seg == NULL) {
-			cur_seg = tcp_exch->in_segments;
-		} else {
-			cur_seg = prev_seg->next;
-		}
+		tcp_segment_list_t *cur_seg = tcp_exch->in_segments;
 		while(cur_seg != NULL && cur_seg->relative_sn < tcp_exch->cur_ackn - tcp_exch->beg_ackn) {
 			ret_val = tcp_exch->callback(port, protocol, payload_addr, payload_size, tcp_exch->user_data);
 			if(ret_val != WEB_SUCCESS) {
 				break;
 			}
-			prev_seg = cur_seg;
-			cur_seg = cur_seg->next;
+			tcp_exch->in_segments = cur_seg->next;
+			free(cur_seg->payload);
+			free(cur_seg);
+			cur_seg = tcp_exch->in_segments;
 		}
-		tcp_exch->last_in_acked = prev_seg;
 	}
 
 	return ret_val;
@@ -435,7 +417,7 @@ void fetch_tcp_flags(const tcp_segment_t *tcp_seg, tcp_exchange_t *tcp_exch, boo
 			case TCP_STATE_FIN_WAIT_2:
 			case TCP_STATE_TIME_WAIT:
 				tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
-				tcp_exch->timeout_close = rtc_Time() + TIMEOUT_TIME_WAIT;
+				// delay_event(TIMEOUT_TIME_WAIT * 1000, time_wait_scheduler, time_wait_destructor, tcp_exch);
 				dbg_verb("WAIT2 -> TIME_WAIT");
 				break;
 			case TCP_STATE_ESTABLISHED:

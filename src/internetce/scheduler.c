@@ -26,7 +26,7 @@ void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
             - every is in range [1, 44*1000] as counter overflows every ~ 90s
     */
     if(every == 0 || every > 44 * 1000) {
-        dbg_err("Schedule has been given bad arguments");
+        dbg_err("schedule has been given bad arguments");
         return;
     }
     schedule_list_t *new_event = malloc(sizeof(schedule_list_t));
@@ -35,6 +35,28 @@ void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
     new_event->destructor_callback = destructor_callback;
     new_event->user_data = user_data;
     new_event->date = usb_GetCounter();
+
+    insert_event(new_event);
+}
+
+void delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
+                 web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data) {
+    /*
+        Preconditions:
+            - user_data is a unique number (among all currently valid events)
+            - offset_ms is in range [1, 44*1000] as counter overflows every ~ 90s
+    */
+    if(offset_ms == 0 || offset_ms > 44 * 1000) {
+        dbg_err("delay has been given bad arguments");
+        return;
+    }
+
+    schedule_list_t *new_event = malloc(sizeof(schedule_list_t));
+    new_event->every = 0;  /* only once */
+    new_event->schedule_callback = schedule_callback;
+    new_event->destructor_callback = destructor_callback;
+    new_event->user_data = user_data;
+    new_event->date = usb_GetCounter() + MS_TO_TICK(offset_ms);
 
     insert_event(new_event);
 }
@@ -113,8 +135,15 @@ void insert_event(schedule_list_t *new_event) {
 void update_event_time() {
     schedule_list_t *cur_event = event_list;
     event_list = cur_event->next;
-    cur_event->date = usb_GetCounter() + cur_event->every;
-    insert_event(cur_event);
+    if(cur_event->every != 0) {
+        cur_event->date = usb_GetCounter() + cur_event->every;
+        insert_event(cur_event);
+    } else {
+        if(cur_event->destructor_callback != NULL) {
+            cur_event->destructor_callback(cur_event->user_data);
+         }
+        free(cur_event);
+    }
 }
 
 web_status_t dispatch_time_events() {
@@ -132,14 +161,13 @@ web_status_t dispatch_time_events() {
     return WEB_SUCCESS;
 }
 
-// TODO changer le mécanisme de timeout là où est utilisé rtc_Time, notamment :
-//  - DNS -> faut changer le système de timeout pour qu'il soit internal à web_ScheduleDNSRequest.
-//           Parce que pour le moment c'est hyper sale, je free une structure qui, si on reçoit une réponse, va être utilisée
-//  - TCP SYN & FIN
-//  - HTTP
-//  - ICMP
+web_status_t boolean_scheduler(web_callback_data_t *user_data) {
+	bool *is_timeout = (bool *)user_data;
+	*is_timeout = true;
+	return WEB_SUCCESS;
+}
 
-// NOTE!!!! Ça demande de changer une peu le scheduler pour ne pas exécuter le callback tout de suite
-// Notamment ça pourrait être pas mal de permettre un reset_event qui ne re-exécute pas immédiatement le callback.
-
-// + changer les TIMEOUT (sauf HTTP) à 10s ? 30 c'est bien trop pour notre utilisation.
+void boolean_destructor(web_callback_data_t *user_data) {
+	bool *is_timeout = (bool *)user_data;
+	*is_timeout = true;
+}

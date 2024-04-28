@@ -129,6 +129,7 @@ typedef web_status_t (web_port_callback_t)(web_port_t port, uint8_t protocol, vo
 
 /**
  * The callback used to notice the user a DNS reply has been received.
+ * If res_ip == 0xffffffff, then the request failed.
  */
 typedef web_status_t (web_dns_callback_t)(web_port_t port, uint32_t res_ip, web_callback_data_t *user_data);
 
@@ -391,9 +392,7 @@ typedef struct tcp_exchange {
 	uint32_t beg_ackn;					/**< First server's sequence number, set just after SYN ACK			*/
 	uint32_t cur_ackn;					/**< Current server's sequence number (our ack number)				*/
 	tcp_segment_list_t *in_segments;	/**< Received data that has not been sent to the application yet	*/
-	tcp_segment_list_t *last_in_acked;	/**< The last in segment that has been sent to the application user	*/
 	pushed_seg_list_t *out_segments;	/**< The segments pushed on the send queue that are waiting for an ack */
-	uint32_t timeout_close;				/**< If in TIME_WAIT state: the time when closing and freeing the connection */
 	bool dirty;							/**< Connection to delete as soon as possible						*/
 	web_port_callback_t *callback;		/**< Callback when a packet is addressed to port_src				*/
 	web_callback_data_t *user_data;		/**< In our case, an http_exchange_t structure						*/
@@ -437,7 +436,8 @@ typedef struct tcp_exchange_list {
 #define RNDIS_STATUS_MEDIA_DISCONNECT   0x4001000C
 
 #define SEND_EVERY			(2 * 1000)	/**< Hardcoded value but in theory this should be calculated		*/
-#define TIMEOUT_WEB			30			/**< Maximum time of a web request (HTTP, DNS...)					*/
+#define TIMEOUT_NET			10			/**< Timeout for general networking requests (TCP/DNS...)			*/
+#define TIMEOUT_HTTP		30			/**< Maximum time of a web request									*/
 #define TIMEOUT_TIME_WAIT	30			/**< Timeout after what the connextion is freed in TIME_WAIT state	*/
 
 #define ETH_IPV4			0x0008		/**< big endian stored												*/
@@ -551,9 +551,9 @@ uint32_t web_SendDNSRequest(const char *url);
  *	@param	url The URL you want to know the IP address.
  *	@param	callback The function you want to be called once the reply is received.
  *	@param	user_data Pointer passed to your callback.
- *	@returns A \c dns_exchange_t structure or \c NULL.
+ *	@returns  \c WEB_SUCCESS or an error.
  */
-dns_exchange_t *web_PushDNSRequest(const char *url, web_dns_callback_t *callback, web_callback_data_t *user_data);
+web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, web_callback_data_t *user_data);
 
 /**
  * @brief  Connect the device to the specified \c ip_dst:port_dst. All messages received from this address will be

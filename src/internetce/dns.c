@@ -4,6 +4,7 @@
 
 #include "include/dns.h"
 #include "include/core.h"
+#include "include/scheduler.h"
 
 
 /**********************************************************************************************************************\
@@ -11,24 +12,19 @@
 \**********************************************************************************************************************/
 
 uint32_t web_SendDNSRequest(const char *url) {
-	const uint32_t timeout = rtc_Time() + TIMEOUT_WEB;
 	uint32_t res_ip = 0;
-	dns_exchange_t *dns_exch = web_PushDNSRequest(url, &dns_callback, &res_ip);
-	if(dns_exch != NULL) {
-		while(!res_ip) {
-			web_WaitForEvents();
-			if(timeout <= rtc_Time()) {
-				web_PopMessage(dns_exch->queued_request);
-				web_UnlistenPort(dns_exch->port_src);
-				free(dns_exch);
-				return 0xffffffff;
-			}
-		}
+	web_status_t status = web_PushDNSRequest(url, &dns_callback, &res_ip);
+	if(status != WEB_SUCCESS) {
+		return 0xffffffff;
+	}
+
+	while(!res_ip) {
+		web_WaitForEvents();
 	}
 	return res_ip;
 }
 
-dns_exchange_t *web_PushDNSRequest(const char *url, web_dns_callback_t *callback, web_callback_data_t *user_data) {
+web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, web_callback_data_t *user_data) {
 	static unsigned int id_request = 0x01;
 	/* 2=length byte at the begining of the string+0 terminated string */
 	size_t length_data = sizeof(dns_message_t) + strlen(url) + 2 + 4;
@@ -61,7 +57,7 @@ dns_exchange_t *web_PushDNSRequest(const char *url, web_dns_callback_t *callback
 
 	dns_exchange_t *dns_exch = malloc(sizeof(dns_exchange_t));
 	if(dns_exch == NULL) {
-		return NULL;
+		return WEB_ERROR_FAILED;
 	}
 	web_port_t client_port = web_RequestPort();
 	dns_exch->port_src = client_port;
@@ -70,10 +66,12 @@ dns_exchange_t *web_PushDNSRequest(const char *url, web_dns_callback_t *callback
 	dns_exch->queued_request = web_PushUDPDatagram(query, length_data, netinfo.DNS_IP_addr, client_port, DNS_PORT);
 	if(dns_exch->queued_request == NULL) {
 		free(dns_exch);
-		return NULL;
+		return WEB_ERROR_FAILED;
 	}
 	web_ListenPort(client_port, fetch_dns_msg, dns_exch);
-	return dns_exch;
+
+	delay_event(TIMEOUT_NET * 1000, dns_timeout_scheduler, dns_timeout_destructor, dns_exch);
+	return WEB_SUCCESS;
 }
 
 
@@ -87,25 +85,33 @@ web_status_t dns_callback(web_port_t port, uint32_t res_ip, web_callback_data_t 
 	return WEB_SUCCESS;
 }
 
+web_status_t dns_timeout_scheduler(web_callback_data_t *user_data) {
+	dns_exchange_t *dns_exch = (dns_exchange_t *)user_data;
+	dns_exch->callback(dns_exch->port_src, 0xffffffff, dns_exch->user_data);
+	return WEB_SUCCESS;
+}
+
+void dns_timeout_destructor(web_callback_data_t *user_data) {
+	dns_exchange_t *dns_exch = (dns_exchange_t *)user_data;
+	web_PopMessage(dns_exch->queued_request);
+	web_UnlistenPort(dns_exch->port_src);
+	free(dns_exch);
+}
+
 web_status_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data){
 	(void)port; (void)length; /* Unused parameters */
-	if(protocol != UDP_PROTOCOL)
-		return WEB_SUCCESS;
-
 	dns_exchange_t *exch = (dns_exchange_t *)user_data;
-	web_PopMessage(exch->queued_request);
-	web_UnlistenPort(port);
-
 	const udp_datagram_t *udp_dtgm = (udp_datagram_t *)msg;
-	if(htons(udp_dtgm->port_src) == DNS_PORT) {
-		const dns_message_t *dns_msg = (dns_message_t*)((uint8_t*)udp_dtgm + sizeof(udp_datagram_t));
+	if(protocol != UDP_PROTOCOL || htons(udp_dtgm->port_src) != DNS_PORT) {
+		return WEB_SUCCESS;
+	}
 
-		/* if -> it isn't a response OR the recursion wasn't available OR an error occurred */
-		if(!(dns_msg->flags & 0x8000) || !(dns_msg->flags & 0x0080) || (dns_msg->flags & 0x0F00)) {
-			web_status_t ret_err = (*exch->callback)(port, 0xffffffff, exch->user_data);
-			free(exch);
-			return ret_err;
-		}
+	web_status_t ret_val = WEB_SUCCESS;
+	uint32_t found_ip = 0xffffffff;
+	const dns_message_t *dns_msg = (dns_message_t*)((uint8_t*)udp_dtgm + sizeof(udp_datagram_t));
+
+	/* if -> it isn't a response OR the recursion wasn't available OR an error occurred */
+	if((dns_msg->flags & 0x8000) && (dns_msg->flags & 0x0080) && !(dns_msg->flags & 0x0F00)) {
 		const uint8_t nb_answers = dns_msg->answerRRs >> 8;
 		const uint8_t nb_queries = dns_msg->questions >> 8;
 
@@ -121,18 +127,14 @@ web_status_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 			ptr += *ptr + 1;
 			i++;
 		}
-		if(i == nb_answers) {
-			web_status_t ret_err = (*exch->callback)(port, 0xffffffff, exch->user_data);
-			free(exch);
-			return ret_err;
-		}
 
-		ptr += 12;
-		web_status_t ret_err = (*exch->callback)(port, *((uint32_t *)ptr), exch->user_data);
-		free(exch);
-		return ret_err;
+		if(i != nb_answers) {
+			ptr += 12;
+			found_ip = *((uint32_t *)ptr);
+		}
 	}
 
-	free(exch);
-	return WEB_SUCCESS;
+	ret_val = (*exch->callback)(port, found_ip, exch->user_data);
+	remove_event(exch);  // Deletes all data structures allocated
+	return ret_val;
 }

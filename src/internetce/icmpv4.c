@@ -4,6 +4,7 @@
 #include "include/icmpv4.h"
 #include "include/ipv4.h"
 #include "include/debug.h"
+#include "include/scheduler.h"
 
 
 /**********************************************************************************************************************\
@@ -34,14 +35,17 @@ web_status_t web_Ping(uint32_t ip_dst) {
 		return WEB_ERROR_FAILED;
 	}
 
+	bool is_timeout = false;
+	delay_event(TIMEOUT_PING * 1000, boolean_scheduler, boolean_destructor, &is_timeout);
 	waiting_ping = ip_dst;
-	const uint32_t timeout_date = rtc_Time() + PING_TIMEOUT;
 	while(waiting_ping == ip_dst) {
-		if(rtc_Time() >= timeout_date) {
+		web_WaitForEvents();
+		if(is_timeout) {
+			waiting_ping = 0;
 			return WEB_TIMEOUT;
 		}
-		web_WaitForEvents();
 	}
+	remove_event(&is_timeout);
 
 	return WEB_SUCCESS;
 }
