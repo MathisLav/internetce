@@ -1,4 +1,5 @@
 #include <internet.h>
+#include <fileioc.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -62,7 +63,7 @@ void web_Cleanup() {
 	http_data_list_t *next_data = NULL;
 	while(cur_data) {
 		next_data = cur_data->next;
-		os_DelVarArc(OS_TYPE_APPVAR, cur_data->varname);
+		ti_Delete(cur_data->varname);
 		free(cur_data);
 		cur_data = next_data;
 	}

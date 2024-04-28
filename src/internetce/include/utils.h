@@ -20,8 +20,6 @@ var_t *MoveToRam(const char* name);
 
 bool os_EnoughMem(size_t mem);
 
-int os_DelVarArc(uint8_t type, const char *name);
-
 int ResizeAppVar(const char* name, size_t new_size); /* 1=the resizing happened, 0 if not */
 
 
