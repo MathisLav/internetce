@@ -16,7 +16,6 @@ _Arc_Unarc		equ		0021448h
 _OP1ToOP6		equ		00202E8h
 _OP6ToOP1		equ		00202C4h
 _EnoughMem		equ		002051Ch
-_DelVarArc		equ		0021434h
 _DelMem			equ		0020590h
 _InsertMem		equ		0020514h
 
@@ -84,28 +83,6 @@ _os_EnoughMem:
 	inc hl
 	ret
 
-
-	section .text
-	public _os_DelVarArc
-_os_DelVarArc:
-	call __frameset0
-	ld a,(ix+6)
-	ld hl,(ix+9)
-	ld (OP1),a
-	ld de,OP1+1
-	ld bc,8
-	ldir
-	call _ChkFindSym
-	jq c,.err_not_found
-	call _DelVarArc
-	ld hl,1
-	pop ix
-	ret
-.err_not_found:
-	or a
-	sbc hl,hl
-	pop ix
-	ret
 
 	section .text
 	public _ResizeAppVar

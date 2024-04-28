@@ -9,6 +9,7 @@
 #include <internet.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static bool ended = false;
 
@@ -24,17 +25,17 @@ void disp_hex(const void *addr, size_t len) {
 }
 
 
-usb_error_t dns_callback(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
+web_status_t user_dns_callback(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data) {
 	(void)protocol; (void)length;
 	msg_queue_t *queued = (msg_queue_t *)user_data;
-	web_popMessage(queued);
+	web_PopMessage(queued);
 
 	disp_hex(msg, length);
 	while(!os_GetCSC()) {}
 
 	web_UnlistenPort(port);
 	ended = true;
-	return USB_SUCCESS;
+	return WEB_SUCCESS;
 }
 
 
@@ -84,7 +85,7 @@ int main(void)
 	web_port_t client_port = web_RequestPort();
 	msg_queue_t *queued = web_PushUDPDatagram(query, length, 0x08080808, client_port, DNS_PORT);
 	free(query);
-	web_ListenPort(client_port, dns_callback, queued);
+	web_ListenPort(client_port, user_dns_callback, queued);
 
 	while(!os_GetCSC() && !ended) { // ended : global variable
 		web_WaitForEvents();
