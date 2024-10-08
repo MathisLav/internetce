@@ -1,6 +1,7 @@
 ; Random Number Generator
 ; Using memory bus noise to output "pretty-good" random numbers (best we can do)
 
+
 ; void fill_urandom(void *dst, unsigned int size);
 	section .text
     public _fill_urandom
