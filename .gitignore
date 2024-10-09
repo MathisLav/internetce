@@ -11,6 +11,8 @@
 *.ilk
 *.map
 *.exp
+*.lto
+*.bin
 
 # Precompiled Headers
 *.gch
@@ -34,12 +36,15 @@
 *.i*86
 *.x86_64
 *.hex
+*.8xp
 
 # Debug files
 *.dSYM/
 *.su
 *.idb
 *.pdb
+*.src
+*.bc
 
 # Kernel Module Compile Results
 *.mod*
@@ -58,3 +63,9 @@ old/*
 
 # dependancies
 clibs.8xg
+
+# JSON autotest files
+tests/**/*.json
+
+# Generated multiplication file
+src/internetce/crypto/mult256.asm

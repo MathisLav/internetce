@@ -29,6 +29,7 @@ _x25519_clampscalar:
     and a, (iy+31)
     or a, 0x40
     ld (iy+31), a
+    pop ix
     ret
 
     public _x25519_scalarmult
@@ -88,8 +89,9 @@ end repeat
     ex af, af'
 
     ; Swapping (or not) A/B, C/D
-    ld a, (current_scalar_byte)
-    rla
+    xor a, a
+    ld hl, current_scalar_byte
+    rl (hl)
     swap25519
     
     ld iy, point_e
@@ -180,34 +182,35 @@ end repeat
     ld ix, point_e
     lea iy, ix
     call x25519_mult  ; fmul(b, e, e)
-
+    
     ; Swapping back (or not) A/B, C/D
-    ld a, (current_scalar_byte)
-    rla
-    ld (current_scalar_byte), a
-    swap25519
+    ld hl, point_u
+    ld (pointer_a), hl
+    ld hl, point_v
+    ld (pointer_b), hl
+    ld hl, point_x
+    ld (pointer_c), hl
+    ld hl, point_y
+    ld (pointer_d), hl
 
     ex af, af'
-    ; a = 1 [8] ?
-    ; if a matches .....001 this means HL must be decremented
-    ld b, a
-    and a, 7
     dec a
-    ld a, b
-    jr z, .take_next
-    dec a
-    jp .scalar_mult_loop  ; if A == 0 it will go in take_next
+    jr z, .end_scalar_mult
+    ; a = 0 [8] ?
+    ; if a matches .....000 this means HL must be decremented
+    tst a, 7
+    jp nz, .scalar_mult_loop
 
-.take_next:
+    ; Taking next byte in scalar
     pop hl
     dec hl
     push hl
     ld b, (hl)
     ld hl, current_scalar_byte
     ld (hl), b
-    dec a
-    jp nz, .scalar_mult_loop
+    jp .scalar_mult_loop
 
+.end_scalar_mult:
     inc sp  ; poping HL from stack
     inc sp
     inc sp
@@ -235,7 +238,6 @@ end repeat
 macro swap25519?
     ; If carry flag is set: exchange A/B, C/D
     ; Otherwise, "do nothing"
-    ld a, 0  ; preserving carry flag
     rla
     ld e, a
     add a, e
