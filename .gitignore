@@ -59,10 +59,11 @@ dkms.conf
 bin/*
 obj/*
 old/*
-.vscode/*
+!.vscode/*
 
 # dependancies
-clibs.8xg
+!clibs.8xg
+!*.rom
 
 # JSON autotest files
 tests/**/*.json

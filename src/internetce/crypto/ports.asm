@@ -101,7 +101,9 @@ port_old:
 .malloc_target := $-3
 	ld hl, 0
 .free_target := $-3
+	push hl
 	call _free
+	pop hl
 	ret
 .unlockhelper:
 	call	_frameset0

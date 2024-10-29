@@ -5,6 +5,11 @@
 #ifndef INTERNET_DEBUG
 #define INTERNET_DEBUG
 
+#include <stdio.h>
+#include <internet.h>
+
+#include "core.h"
+
 
 #define NO_DEBUG		0
 #define DEBUG_ERRORS	1
@@ -15,7 +20,7 @@
 /**
  * Change this define to make the lib more or less verbose
  */
-#define DEBUG_LEVEL NO_DEBUG
+#define DEBUG_LEVEL DEBUG_INFO
 
 
 #if DEBUG_LEVEL == NO_DEBUG
@@ -31,7 +36,7 @@
 #elif DEBUG_LEVEL == DEBUG_ERRORS
 	void debug(const void *addr, size_t len);
 	void printf_xy(unsigned int xpos, unsigned int ypos, const char *format, ...);
-	void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t length);
+	#define print_tcp_info(...)
 	#define monitor_usb_connection(...)
 	#define pause() while(!os_GetCSC()) {}
 	#define dbg_err(...) printf("E: " __VA_ARGS__); printf("\n")
@@ -41,7 +46,7 @@
 #elif DEBUG_LEVEL == DEBUG_WARNINGS
 	void debug(const void *addr, size_t len);
 	void printf_xy(unsigned int xpos, unsigned int ypos, const char *format, ...);
-	void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t length);
+	#define print_tcp_info(...)
 	#define monitor_usb_connection(...)
 	#define pause() while(!os_GetCSC()) {}
 	#define dbg_err(...) printf("E: " __VA_ARGS__); printf("\n")

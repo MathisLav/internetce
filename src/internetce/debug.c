@@ -28,7 +28,9 @@ void printf_xy(unsigned int xpos, unsigned int ypos, const char *format, ...) {
 	va_end(args);
 	os_SetCursorPos(x, y);
 }
+#endif
 
+#if DEBUG_LEVEL >= DEBUG_INFO
 void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t length) {
 	printf("TCP: ");
 	if(seg->dataOffset_flags & htons(FLAG_TCP_SYN)) {
@@ -57,7 +59,7 @@ void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t l
 }
 #endif
 
-#if DEBUG >= DEBUG_VERBOSE
+#if DEBUG_LEVEL >= DEBUG_VERBOSE
 void monitor_usb_connection(usb_event_t event, device_state_t state) {
 	static const char *usb_event_names[] = {
 	        "USB_ROLE_CHANGED_EVENT",

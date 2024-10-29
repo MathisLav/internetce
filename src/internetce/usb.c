@@ -6,6 +6,7 @@
 #include "include/core.h"
 #include "include/rndis.h"
 #include "include/debug.h"
+#include "include/crypto.h"
 #include "include/ethernet.h"
 
 
@@ -36,7 +37,17 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 		default:
 			break;
 	}
-	monitor_usb_connection(event);
+
+	/**
+	 * Feeding the Random Number Generator module with the current timer value.
+	 * Only doing this a the beggining, when we need fast (but not perfect) entropy.
+	 * Then, better entropy is given by the timing the lib receives USB packets.
+	 */
+	if(!rng_IsAvailable()) {
+		rng_FeedFromEvent();
+	}
+
+	monitor_usb_connection(event, netinfo.state);
 
 	return USB_SUCCESS;
 }
@@ -139,6 +150,8 @@ usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t stat
 
 	void *packet = *(void **)data;
 	*(void **)data = NULL;
+
+	rng_FeedFromEvent();  // Seeding Random Number Generation module
 
 	if(status & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (pckt)");

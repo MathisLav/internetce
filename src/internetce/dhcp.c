@@ -6,6 +6,7 @@
 #include "include/dhcp.h"
 #include "include/core.h"
 #include "include/debug.h"
+#include "include/crypto.h"
 
 
 /**********************************************************************************************************************\
@@ -24,7 +25,9 @@ static msg_queue_t *dhcp_last_msg_queue = NULL;
 msg_queue_t *push_dhcp_message(size_t opt_size, const uint8_t *options, uint32_t dhcp_server_ip) {
 	static uint32_t xid = 0;
 	if(xid == 0) {  /* If not initialized yet */
-		xid = random();
+		if(rng_Random32b(&xid) != 0) {
+			return NULL;
+		}
 	}
 
 	const size_t size = sizeof(dhcp_message_t) + opt_size;
@@ -46,13 +49,18 @@ msg_queue_t *push_dhcp_message(size_t opt_size, const uint8_t *options, uint32_t
 							   SERVER_DHCP_PORT);
 }
 
-void dhcp_init() {
+int dhcp_init() {
 	const uint8_t options_disc[] = {
 		DHCP_OPT_TYPE_ID, DHCP_OPT_TYPE_LEN, DHCP_OPT_V_DISCOVER,
 		DHCP_OPT_END_OPTIONS};
 	dhcp_last_msg_queue = push_dhcp_message(sizeof(options_disc), options_disc, 0x00);
+	if(dhcp_last_msg_queue == NULL) {
+		dbg_err("An error occurred in dhcp_init");
+		return -1;
+	}
 	web_ListenPort(CLIENT_DHCP_PORT, fetch_dhcp_msg, NULL);
 	netinfo.dhcp_cur_state = DHCP_STATE_INIT;
+	return 0;
 }
 
 web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t length,
@@ -84,6 +92,8 @@ web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 						dhcp_last_msg_queue = push_dhcp_message(sizeof(options_req), options_req, dhcp_msg->siaddr);
 						if(dhcp_last_msg_queue != NULL) {
 							netinfo.dhcp_cur_state = DHCP_STATE_SELECTING;
+						} else {
+							dbg_err("An error occurred in fetch_dhcp_msg");
 						}
 					} else if(cur_opt[2] == DHCP_OPT_V_ACK && netinfo.dhcp_cur_state == DHCP_STATE_SELECTING) {
 						if(dhcp_last_msg_queue != NULL) {

@@ -14,6 +14,7 @@
 #include "include/rndis.h"
 #include "include/scheduler.h"
 #include "include/transport_layer.h"
+#include "include/crypto.h"
 
 
 /**********************************************************************************************************************\
@@ -41,6 +42,8 @@ void web_Init() {
 	netinfo.device = NULL;
 	netinfo.IP_addr = 0;
 	memset(netinfo.router_MAC_addr, 0xFF, 6);
+	flash_setup();
+	rng_Init();
 
 	usb_Init(usbHandler, NULL, NULL, USB_DEFAULT_INIT_FLAGS);
 }
@@ -97,8 +100,10 @@ web_status_t web_WaitForEvents() {
 			break;  /* WEB_SUCCESS */
 
 		case STATE_RNDIS_DATA_INIT:
-			dhcp_init();
-			netinfo.state = STATE_DHCP_CONFIGURING;
+			/* We need sufficent entropy to continue (otherwise the RNG will not work) */
+			if(dhcp_init() == 0) {
+				netinfo.state = STATE_DHCP_CONFIGURING;
+			}
 			break;  /* WEB_SUCCESS */
 		
 		case STATE_DHCP_CONFIGURING:

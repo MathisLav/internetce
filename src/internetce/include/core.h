@@ -76,5 +76,14 @@ inline uint16_t htons(uint16_t val) {
 	return ((uint16_t)pval[0] * 256) + pval[1];
 }
 
+inline uint24_t htonl24(uint24_t val) {
+	uint8_t *pval = (uint8_t *)&val;
+	return ((uint24_t)pval[0] << 16) + ((uint24_t)pval[1] << 8) + pval[2];
+}
+
+#define ntohl htonl
+#define ntohs htons
+#define ntohl24 htonl24
+
 
 #endif // INTERNET_CORE

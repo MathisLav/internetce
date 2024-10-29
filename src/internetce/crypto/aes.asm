@@ -1,5 +1,10 @@
 ; Target: 7680 cycles per iteration for a 16-byte block
 
+; TODO:
+;   - normalement j'ai testé les deux premières itérations _compute_round_keys c'est ok (pour ce que je comprends de l'algo)
+;   - Donc mtn il faut tester le _cipher_aes128
+;   - puis faire le decipher
+
 
 ; ******* equates *******
 ; RomCalls
@@ -7,9 +12,10 @@
 
 
     section .text
+
     public _compute_round_keys
 _compute_round_keys:
-    ; IX+3 -> key space (172 B, the 16 first bytes are the original key)
+    ; IX+6 -> key space (172 B, the 16 first bytes are the original key)
     ; Cost: 10011 Cycles (< 1ms) -> OK
     ; Size: 10*4 + 44 = 84 Bytes
     di

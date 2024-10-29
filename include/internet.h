@@ -47,6 +47,9 @@ typedef enum web_status {
 	WEB_DNS_ERROR,									/**< An error occurred in the DNS reply.	*/
 	WEB_NOT_SUPPORTED,								/**< Not yet supported */
 	WEB_ERROR_FAILED,								/**< General error (a packet couldn't be sent, etc) */
+	WEB_NOT_ENOUGH_ENTROPY,							/**< Not enought entropy */
+	WEB_SHA256_NOT_INITIALIZED,
+	WEB_SHA256_IN_USE,
 	HTTP_STATUS_OK = 200,
 	HTTP_STATUS_MOVED_PERMANENTLY = 301,
 	HTTP_STATUS_NOT_MODIFIED = 304,
@@ -89,6 +92,60 @@ typedef enum tcp_state {
 	TCP_STATE_TIME_WAIT,
 	TCP_STATE_CLOSED
 } tcp_state_t;
+
+/**
+ * TLS enums
+ */
+
+typedef enum tls_content_type {
+	TLS_INVALID_TYPE		= 0,
+	TLS_CHANGE_CIPHER_SPEC	= 20,
+	TLS_ALERT_TYPE			= 21,
+	TLS_HANDSHAKE_TYPE		= 22,
+	TLS_APPLI_DATA_TYPE		= 23
+} tls_content_type_t;
+
+typedef enum tls_alert_level {
+	TLS_ALERT_LEVEL_WARNING	= 1,
+	TLS_ALERT_LEVEL_FATAL	= 2
+} tls_alert_level_t;
+
+typedef enum tls_alert_description {
+	TLS_ALERT_CLOSE_NOTIFY						= 0,
+	TLS_ALERT_UNEXPECTED_MESSAGE				= 10,
+	TLS_ALERT_BAD_RECORD_MAC					= 20,
+	TLS_ALERT_DECRYPTION_FAILED_RESERVED		= 21,
+	TLS_ALERT_RECORD_OVERFLOW					= 22,
+	TLS_ALERT_DECOMPRESSION_FAILURE_RESERVED	= 30,
+	TLS_ALERT_HANDSHAKE_FAILURE					= 40,
+	TLS_ALERT_NO_CERTIFICATE_RESERVED			= 41,
+	TLS_ALERT_BAD_CERTIFICATE					= 42,
+	TLS_ALERT_UNSUPPORTED_CERTIFICATE			= 43,
+	TLS_ALERT_CERTIFICATE_REVOKED				= 44,
+	TLS_ALERT_CERTIFICATE_EXPIRED				= 45,
+	TLS_ALERT_CERTIFICATE_UNKNOWN				= 46,
+	TLS_ALERT_ILLEGAL_PARAMETER					= 47,
+	TLS_ALERT_UNKNOWN_CA						= 48,
+	TLS_ALERT_ACCESS_DENIED						= 49,
+	TLS_ALERT_DECODE_ERROR						= 50,
+	TLS_ALERT_DECRYPT_ERROR						= 51,
+	TLS_ALERT_EXPORT_RESTRICTION_RESERVED		= 60,
+	TLS_ALERT_PROTOCOL_VERSION					= 70,
+	TLS_ALERT_INSUFFICIENT_SECURITY				= 71,
+	TLS_ALERT_INTERNAL_ERROR					= 80,
+	TLS_ALERT_INAPPROPRIATE_FALLBACK			= 86,
+	TLS_ALERT_USER_CANCELED						= 90,
+	TLS_ALERT_NO_RENEGOTIATION_RESERVED			= 100,
+	TLS_ALERT_MISSING_EXTENSION					= 109,
+	TLS_ALERT_UNSUPPORTED_EXTENSION				= 110,
+	TLS_ALERT_CERTIFICATE_UNOBTAINABLE_RESERVED	= 111,
+	TLS_ALERT_UNRECOGNIZED_NAME					= 112,
+	TLS_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE	= 113,
+	TLS_ALERT_BAD_CERTIFICATE_HASH_VALUE_RESERVED	= 114,
+	TLS_ALERT_UNKNOWN_PSK_IDENTITY				= 115,
+	TLS_ALERT_CERTIFICATE_REQUIRED				= 116,
+	TLS_ALERT_NO_APPLICATION_PROTOCOL			= 120
+} tls_alert_description_t;
 
 
 /**
@@ -341,6 +398,37 @@ typedef struct tcp_segment {
 	uint8_t options[];
 } tcp_segment_t;
 
+typedef struct tls_record {
+	uint8_t opaque_type;
+	uint16_t legacy_version;
+	uint16_t length;
+	uint8_t data[];
+} tls_record_t;
+
+typedef struct tls_extension {
+	uint16_t extension_id;
+	uint16_t extension_length;
+	uint8_t data[];
+} tls_extension_t;
+
+typedef struct tls_handshake {
+	tls_record_t header;
+	uint8_t hs_type;
+	uint24_t length;
+	uint16_t version;
+	uint8_t random[32];
+	uint8_t zero;			/**< Session ID not used in TLS 1.3						*/
+	// uint8_t cipher_suits[];
+	// uint8_t compression_methods_size;
+	// uint8_t zero			/**< no compression methods in TLS 1.3					*/
+	// uint8_t extensions[];
+} tls_handshake_t;
+
+typedef struct tls_alert_record {
+	uint8_t alert_level;
+	uint8_t alert_description;
+} tls_alert_record_t;
+
 typedef struct network_pseudo_hdr {
     uint32_t ip_src;
     uint32_t ip_dst;
@@ -464,6 +552,7 @@ typedef struct tcp_exchange_list {
 #define ICMP_HEADERS_SIZE	(IPV4_HEADERS_SIZE + sizeof(icmpv4_echo_t))
 #define TCP_HEADERS_SIZE	(IPV4_HEADERS_SIZE + sizeof(tcp_segment_t))
 #define UDP_HEADERS_SIZE	(IPV4_HEADERS_SIZE + sizeof(udp_datagram_t))
+#define TLS_HEADERS_SIZE	(TCP_HEADERS_SIZE + sizeof(tls_record_t))
 #define MIN_ETH_HDR_SIZE	64
 
 #define FLAG_TCP_NONE		0
@@ -587,7 +676,7 @@ void web_TCPClose(tcp_exchange_t *tcp_exch);
  * 	@param	options The TCP options to send (or NULL).
  * 	@returns  \c WEB_SUCCESS or an error.
  */
-web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, char *data, size_t length, uint16_t flags, size_t opt_size,
+web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length, uint16_t flags, size_t opt_size,
 				  				   const uint8_t *options);
 
 /**

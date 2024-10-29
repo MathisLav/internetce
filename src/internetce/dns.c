@@ -40,7 +40,7 @@ web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, w
 	char *cursor_qry = (char *)(buffer + sizeof(dns_message_t) + 1);
 	char *cursor_str = (char *)url;
 	uint8_t i = 1;
-	while(*cursor_str) {
+	while(*cursor_str != '\0' && *cursor_str != '/') {
 		if(*cursor_str == '.') {
 			*(cursor_qry - i) = i - 1;
 			i = 0;

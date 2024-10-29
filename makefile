@@ -24,6 +24,11 @@ $(CRYPTO_ROOT)/mult256.asm: $(CRYPTO_ROOT)/generate_mult.py
 autotest:
 	@$(MAKE) -C tests/
 
+clean: clean_all
+
+clean_all:
+	@git clean -Xfd
+
 # ----------------------------
 # Includes
 # ----------------------------

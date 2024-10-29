@@ -11,6 +11,7 @@
 #include "include/http.h"
 #include "include/ipv4.h"
 #include "include/scheduler.h"
+#include "include/crypto.h"
 
 
 tcp_exchange_list_t *tcp_exchanges = NULL;
@@ -43,7 +44,7 @@ web_status_t web_SendRawTCPSegment(void *data, size_t length_data, uint32_t ip_d
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
 
-web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, char *data, size_t length, uint16_t flags, size_t opt_size,
+web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length, uint16_t flags, size_t opt_size,
 				  				   const uint8_t *options) {
 	/* Default is FLAG_TCP_ACK */
 	if(flags == FLAG_TCP_NONE) {
@@ -72,6 +73,11 @@ web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, char *data, size_t 
 
 tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_callback_t *callback,
 							   web_callback_data_t *user_data) {
+	if(!rng_IsAvailable()) {
+		dbg_err("Random module not ready yet");
+		return NULL;
+	}
+
 	/* Core structure of a tcp exchange */
 	tcp_exchange_list_t *tcp_exch_list = malloc(sizeof(tcp_exchange_list_t));
 	tcp_exchange_t *tcp_exch = &tcp_exch_list->tcp_exch;
@@ -79,7 +85,7 @@ tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_ca
 	tcp_exch->ip_dst = ip_dst;
 	tcp_exch->port_src = web_RequestPort();
 	tcp_exch->port_dst = port_dst;
-	tcp_exch->cur_sn = random();
+	rng_Random32b(&tcp_exch->cur_sn);  // Should not fail (if(!rng_IsAvailable())... above)
 	tcp_exch->beg_sn = tcp_exch->cur_sn;
 	tcp_exch->tcp_state = TCP_STATE_SYN_SENT;
 	tcp_exch->callback = callback;
@@ -100,6 +106,7 @@ tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_ca
 		if(is_timeout) {
 			web_UnlistenPort(tcp_exch->port_src);
 			if(tcp_exch->out_segments != NULL) {  /* Removing the SYN segment */
+				web_PopMessage(tcp_exch->out_segments->seg);
 				free(tcp_exch->out_segments);
 			}
 			free(tcp_exch);
@@ -192,7 +199,7 @@ msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t length_d
 	tcp_seg->port_dst = htons(port_dst);
 	tcp_seg->seq_number = htonl(seq_number);
 	tcp_seg->ack_number = htonl(ack_number);
-	tcp_seg->dataOffset_flags = htons(((size_header * 1024)) + flags);
+	tcp_seg->dataOffset_flags = htons((size_header * 1024) + flags);
 	tcp_seg->windowSize = htons(TCP_WINDOW_SIZE);
 	tcp_seg->checksum = 0x0000;
 	tcp_seg->urgentPointer = 0x0000;
@@ -421,7 +428,7 @@ void fetch_tcp_flags(const tcp_segment_t *tcp_seg, tcp_exchange_t *tcp_exch, boo
 				dbg_verb("WAIT2 -> TIME_WAIT");
 				break;
 			case TCP_STATE_ESTABLISHED:
-				dbg_verb("EST -> LAST_ACK");
+				dbg_verb("EST -> CLOSE_WAIT");
 			case TCP_STATE_CLOSE_WAIT:
 				tcp_exch->tcp_state = TCP_STATE_CLOSE_WAIT;
 				break;
