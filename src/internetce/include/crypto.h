@@ -14,8 +14,11 @@
  * Constants
  */
 
-/* Sent during client hello so the server does not send a too large TLS ciphered payload */
-#define AES_MAX_BLOCK_SIZE  4096
+/* Sent during client hello so the server does not send a too large TLS ciphered payload.
+ * 2^13-1 = 2^16 / 8 - 1 = limitation in aes128gcm where the number of bits must not be greater than 2**16-1
+ * Taking 2^12 to be safe
+ */
+#define AES_MAX_BLOCK_SIZE  (2^12)
 
 /* Port layout for SHA256 memory mapped port */
 #define SHA256_CTRL         ((volatile uint8_t *)0xe10000)
@@ -35,13 +38,27 @@
  * Cryptography functions
  */
 
-/* AES */
+/* AES-128 GCM */
 
-void compute_round_keys(uint8_t key_space[172]);
+void compute_round_keys(uint8_t key_space[176]);
 
-void cipher_aes128(void *src, size_t size, void *dst, uint8_t key_space[172]);
+void cipher_aes128gcm(/* IN */  const uint8_t round_keys[176],
+                      /* IN */  const void *plaintext,
+                      /* IN */  size_t length_plaintext,
+                      /* IN */  const uint8_t IV[12],
+                      /* IN */  const void *AAD,
+                      /* IN */  size_t length_aad,
+                      /* OUT */ uint8_t tag[16],
+                      /* OUT */ void *ciphertext);
 
-void decipher_aes128(void *src, size_t size, void *dst, uint8_t key_space[172]);
+int decipher_aes128gcm(/* IN */  const uint8_t round_keys[176],
+                       /* IN */  const void *ciphertext,
+                       /* IN */  size_t length_ciphertext,
+                       /* IN */  const uint8_t IV[12],
+                       /* IN */  const void *AAD,
+                       /* IN */  size_t length_aad,
+                       /* IN */  const uint8_t tag[16],
+                       /* OUT */ void *plaintext);
 
 /* Random */
 

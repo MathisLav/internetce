@@ -64,7 +64,7 @@ web_status_t rng_Update() {
 
     entropy += current_buffer_index;
     current_buffer_index = 0;
-    dbg_info("random module seeded");
+    dbg_info("Random module seeded");
 
     return 0;
 }
@@ -95,7 +95,7 @@ void rng_FeedBit(uint8_t bit) {
 
 void rng_FeedFromEvent() {
     /**
-     * Usualy called when an USB event occurs
+     * Usualy called when an USB event occurs.
      * As this is not a perfect entropy source, it only takes the 4 most significant bits of the LSB of the current timer value
      */
     uint8_t seed = (uint8_t)((usb_GetCycleCounter() >> 4) & 0b1111);
@@ -105,7 +105,7 @@ void rng_FeedFromEvent() {
 }
 
 web_status_t rng_Random256b(uint8_t dst[SHA256_HASH_SIZE]) {
-    if(entropy < MINIMUM_ENTROPY) {
+    if(!rng_IsAvailable()) {
         dbg_err("Not enough entropy");
         return WEB_NOT_ENOUGH_ENTROPY;
     }
