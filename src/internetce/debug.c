@@ -1,6 +1,7 @@
 #include <internet.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "include/debug.h"
 #include "include/core.h"
@@ -31,8 +32,12 @@ void printf_xy(unsigned int xpos, unsigned int ypos, const char *format, ...) {
 #endif
 
 #if DEBUG_LEVEL >= DEBUG_INFO
-void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t length) {
-	printf("TCP: ");
+void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t length, bool is_me) {
+	if(is_me) {
+		printf("SND: ");
+	} else {
+		printf("RCV: ");
+	}
 	if(seg->dataOffset_flags & htons(FLAG_TCP_SYN)) {
 		printf("S");
 	}
@@ -51,11 +56,97 @@ void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t l
 	if(seg->dataOffset_flags & htons(FLAG_TCP_URG)) {
 		printf("U");
 	}
-	if(tcp_exch->beg_ackn != 0) {
-		printf(" (%lu+%d)", htonl(seg->seq_number) - tcp_exch->beg_ackn, length - 4 *
-			   (seg->dataOffset_flags >> 4 & 0x0f));
+
+	uint32_t seq_number = htonl(seg->seq_number);
+	uint32_t ack_number = htonl(seg->ack_number);
+	if(!is_me) {
+		seq_number = ack_number;
+		ack_number = htonl(seg->seq_number);
 	}
-	printf(" a=%lu\n", htonl(seg->ack_number) - tcp_exch->beg_sn);
+	if(tcp_exch->beg_ackn != 0) {
+		printf(" (%lu+%d)", ack_number - tcp_exch->beg_ackn, length - 4 *
+			(seg->dataOffset_flags >> 4 & 0x0f));
+	}
+	printf(" a=%lu\n", seq_number - tcp_exch->beg_sn);
+}
+
+typedef struct alloced_mem {
+	void *ptr;
+	struct alloced_mem *next;
+} alloced_mem_t;
+
+static alloced_mem_t *alloced_mem_list = NULL;
+void *_malloc(size_t size) {
+	alloced_mem_t *alloced_mem = malloc(sizeof(alloced_mem_t));
+	alloced_mem->next = alloced_mem_list;
+	alloced_mem_list = alloced_mem;
+	alloced_mem->ptr = malloc(size);
+	return alloced_mem->ptr;
+}
+
+void *_realloc(void *ptr, size_t size) {
+	alloced_mem_t *cur_alloced = alloced_mem_list;
+	while(cur_alloced) {
+		if(cur_alloced->ptr == ptr) {
+			void *new_ptr = realloc(ptr, size);
+			if(new_ptr == NULL) {
+				return NULL;
+			}
+			cur_alloced->ptr = new_ptr;
+			return new_ptr;
+		}
+		cur_alloced = cur_alloced->next;
+	}
+	dbg_err("NOT FOUND REALLOC %p", ptr);
+	pause();
+	return NULL;
+}
+
+void _free(void *ptr) {
+	alloced_mem_t *cur_alloced = alloced_mem_list;
+	alloced_mem_t *prev_alloced = NULL;
+	while(cur_alloced) {
+		if(cur_alloced->ptr == ptr) {
+			free(ptr);
+			if(prev_alloced) {
+				prev_alloced->next = cur_alloced->next;
+			} else {
+				alloced_mem_list = cur_alloced->next;
+			}
+			free(cur_alloced);
+			return;
+		}
+		prev_alloced = cur_alloced;
+		cur_alloced = cur_alloced->next;
+	}
+	dbg_err("NOT FOUND %p", ptr);
+	pause();
+}
+
+void print_allocated_memory() {
+	alloced_mem_t *cur_alloced = alloced_mem_list;
+	printf("malloc: ");
+	if(alloced_mem_list == NULL) {
+		printf("None\n");
+		return;
+	}
+	while(cur_alloced) {
+		// printf("%p", cur_alloced->ptr);
+		debug(cur_alloced->ptr - 4, 24);
+		cur_alloced = cur_alloced->next;
+	}
+}
+#else
+void *_malloc(size_t size) {
+	return malloc(size);
+}
+
+void *_realloc(void *ptr, size_t size) {
+	return realloc(ptr, size);
+}
+
+void _free(void *ptr) {
+	free(ptr);
 }
 #endif
 
@@ -103,10 +194,10 @@ void monitor_usb_connection(usb_event_t event, device_state_t state) {
 			"USB_HOST_PORT_FORCE_PORT_RESUME_INTERRUPT",
 			"USB_HOST_SYSTEM_ERROR_INTERRUPT",
 	    };
-	    if(event != USB_DEVICE_WAKEUP_INTERRUPT && event != USB_OTG_INTERRUPT && event != USB_DEVICE_DEVICE_INTERRUPT &&
-		   event != USB_DEVICE_INTERRUPT && event != USB_HOST_INTERRUPT) {
-	    	printf("%s\n", usb_event_names[event]);
-	    }
+	    // if(event != USB_DEVICE_WAKEUP_INTERRUPT && event != USB_OTG_INTERRUPT && event != USB_DEVICE_DEVICE_INTERRUPT &&
+		//    event != USB_DEVICE_INTERRUPT && event != USB_HOST_INTERRUPT) {
+	    // 	printf("%s\n", usb_event_names[event]);
+	    // }
 		unsigned int x, y;
 		os_GetCursorPos(&x, &y);
 		os_SetCursorPos(0, 0);
@@ -126,6 +217,9 @@ void monitor_usb_connection(usb_event_t event, device_state_t state) {
 				break;
 			case STATE_UNKNOWN:
 				printf("UNKNOWN     ");
+				break;
+			case STATE_USB_INITIALIZED:
+				printf("INITIALIZED ");
 				break;
 			case STATE_USB_LOST:
 				printf("LOST        ");

@@ -4,6 +4,7 @@
 
 #include "include/dns.h"
 #include "include/core.h"
+#include "include/debug.h"
 #include "include/scheduler.h"
 
 
@@ -55,9 +56,9 @@ web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, w
 	*(cursor_qry + 2) = 1; /* A (IPv4) */
 	*(cursor_qry + 4) = 1; /* IN (internet) */
 
-	dns_exchange_t *dns_exch = malloc(sizeof(dns_exchange_t));
+	dns_exchange_t *dns_exch = _malloc(sizeof(dns_exchange_t));
 	if(dns_exch == NULL) {
-		return WEB_ERROR_FAILED;
+		return WEB_NOT_ENOUGH_MEM;
 	}
 	web_port_t client_port = web_RequestPort();
 	dns_exch->port_src = client_port;
@@ -65,13 +66,23 @@ web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, w
 	dns_exch->user_data = user_data;
 	dns_exch->queued_request = web_PushUDPDatagram(query, length_data, netinfo.DNS_IP_addr, client_port, DNS_PORT);
 	if(dns_exch->queued_request == NULL) {
-		free(dns_exch);
+		_free(dns_exch);
 		return WEB_ERROR_FAILED;
 	}
-	web_ListenPort(client_port, fetch_dns_msg, dns_exch);
+	web_status_t ret_val = web_ListenPort(client_port, fetch_dns_msg, dns_exch);
+	if(ret_val != WEB_SUCCESS) {
+		web_PopMessage(dns_exch->queued_request);
+		_free(dns_exch);
+		return ret_val;
+	}
 
-	delay_event(TIMEOUT_NET * 1000, dns_timeout_scheduler, dns_timeout_destructor, dns_exch);
-	return WEB_SUCCESS;
+	ret_val = delay_event(TIMEOUT_NET * 1000, dns_timeout_scheduler, dns_timeout_destructor, dns_exch);
+	if(ret_val != WEB_SUCCESS) {
+		web_UnlistenPort(client_port);
+		web_PopMessage(dns_exch->queued_request);
+		_free(dns_exch);
+	}
+	return ret_val;
 }
 
 
@@ -95,7 +106,7 @@ void dns_timeout_destructor(web_callback_data_t *user_data) {
 	dns_exchange_t *dns_exch = (dns_exchange_t *)user_data;
 	web_PopMessage(dns_exch->queued_request);
 	web_UnlistenPort(dns_exch->port_src);
-	free(dns_exch);
+	_free(dns_exch);
 }
 
 web_status_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t length, web_callback_data_t *user_data){

@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <internet.h>
 
+#include "tls.h"
+
 
 /**
  * Constants
@@ -19,6 +21,9 @@
  * Taking 2^12 to be safe
  */
 #define AES_MAX_BLOCK_SIZE  (2^12)
+#define AES_128_TAG_SIZE    16
+#define AES_128_KEY_SIZE    16
+#define AES_128_IV_SIZE     12
 
 /* Port layout for SHA256 memory mapped port */
 #define SHA256_CTRL         ((volatile uint8_t *)0xe10000)
@@ -32,6 +37,30 @@
 #define SHA256_CONTINUE_HASH 0x0E
 
 #define SHA256_HASH_SIZE    32
+#define SHA256_BLOCK_SIZE   64
+
+/* X25519 */
+#define X25519_SECRET_SIZE  32
+
+/* In case I choose to add other hash functions */
+#define CIPHER_SUITE_HASH_SIZE   SHA256_HASH_SIZE
+#define CIPHER_SUITE_BLOCK_SIZE  SHA256_BLOCK_SIZE
+
+
+/**
+ * Types
+ */
+
+typedef struct aes128gcm_endpoint_data {
+    uint8_t round_keys[176];
+    uint8_t static_iv[12];
+    size_t sequence_number;             /**< In theory the seq_num is 64-bit wide, in practice, 24 bits is enough   */
+} aes128gcm_endpoint_data_t;
+
+typedef struct aes128gcm_data {
+    aes128gcm_endpoint_data_t cipher_data;
+    aes128gcm_endpoint_data_t decipher_data;
+} aes128gcm_data_t;
 
 
 /**
@@ -39,6 +68,17 @@
  */
 
 /* AES-128 GCM */
+
+web_callback_data_t *aes128gcm_init_callback(uint8_t cipher_key[AES_128_KEY_SIZE], uint8_t cipher_iv[AES_128_IV_SIZE],
+                                             uint8_t decipher_key[AES_128_KEY_SIZE], uint8_t decipher_iv[AES_128_IV_SIZE]);
+
+void aes128gcm_free_callback(web_callback_data_t *cipher_data);
+
+web_status_t aes128gcm_cipher_callback(void *dest, void *source, size_t length, void *aad, size_t aad_length,
+                                       web_callback_data_t *user_data);
+
+web_status_t aes128gcm_decipher_callback(void *dest, void *source, size_t length, void *aad, size_t aad_length,
+                                         web_callback_data_t *user_data);
 
 void compute_round_keys(uint8_t key_space[176]);
 
@@ -74,17 +114,43 @@ void rng_FeedBit(uint8_t bit);
 
 void rng_FeedFromEvent();
 
-web_status_t rng_Random256b(uint8_t dst[SHA256_HASH_SIZE]);
+web_status_t rng_Random256b(uint8_t dst[32]);
 
 web_status_t rng_Random32b(uint32_t *var);
 
 /* HKDF - HMAC Key Derivation Function */
 
-web_status_t hkdf_HMAC(const void *key, size_t key_size, const void *msg, size_t size, uint8_t dst[SHA256_HASH_SIZE]);
+web_status_t hkdf_Extract(const uint8_t salt[], size_t salt_size, const uint8_t ikm[], size_t ikm_size, uint8_t prk[]);
 
-web_status_t hkdf_Extract(const void *salt, size_t salt_size, const void *ikm, size_t ikm_size, uint8_t prk[SHA256_HASH_SIZE]);
+web_status_t hkdf_Expand(const uint8_t prk[], const uint8_t info[], size_t info_size, uint8_t dst[], size_t dst_size);
 
-web_status_t hkdf_Expand(uint8_t prk[SHA256_HASH_SIZE], const void *info, size_t info_size, void *output, size_t output_size);
+web_status_t hkdf_ExpandLabel(const uint8_t secret[], const char *label, const uint8_t hash[], size_t hash_size,
+                              uint8_t dst[], size_t dst_size);
+
+web_status_t hkdf_HMAC(const uint8_t key[], size_t key_size, const uint8_t msg[], size_t size, uint8_t dst[]);
+
+/* Key Schedule */
+
+web_status_t add_transcript_message(linked_transcript_msg_t **transcript, tls_record_t *record);
+
+web_status_t compute_transcript_hash(const linked_transcript_msg_t *transcript, tls_hs_msg_type_t until, uint8_t hash[]);
+
+web_status_t compute_early_secret(const linked_transcript_msg_t *transcript, uint8_t current_secret[], const uint8_t psk[],
+                                  size_t psk_length, uint8_t binder_key[], uint8_t client_early_traffic_secret[],
+                                  uint8_t early_exporter_master_secret[]);
+
+web_status_t compute_handshake_secret(const linked_transcript_msg_t *transcript, uint8_t current_secret[], const uint8_t dhe_ss[],
+                                      size_t dhe_ss_size, uint8_t client_hs_traffic_secret[], uint8_t server_hs_traffic_secret[]);
+
+web_status_t compute_master_secret(const linked_transcript_msg_t *transcript, uint8_t current_secret[],
+                                   uint8_t client_ap_traffic_secret[], uint8_t server_ap_traffic_secret[],
+                                   uint8_t exporter_master_secret[], uint8_t resumption_master_secret[]);
+
+web_status_t update_traffic_secret(const uint8_t current_traffic_secret[], uint8_t new_traffic_secret[]);
+
+web_status_t compute_key_iv_pair(const uint8_t secret[], uint8_t key[], size_t key_size, uint8_t iv[], size_t iv_size);
+
+void _free_transcript(linked_transcript_msg_t **transcript);
 
 /* Ports */
 
@@ -106,9 +172,7 @@ web_status_t sha256_Hash(void *dst);
 
 /* X25519 */
 
-void x25519_clampscalar(uint8_t scalar[32]);
-
-void x25519_scalarmult(uint8_t out[32], uint8_t base_point[32], uint8_t scalar[32]);
+void x25519_scalarmult(uint8_t out[32], const uint8_t base_point[32], uint8_t scalar[32]);
 
 
 #endif // INTERNET_CRYPTO

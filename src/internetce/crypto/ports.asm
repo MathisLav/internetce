@@ -90,7 +90,7 @@ port_old:
     ; Move the unlock sequence under the memory protection range (heapBot)
     ld bc, port_old.end - port_old.start
     push bc
-    call _malloc
+    call __malloc
     pop bc
 	ld (.malloc_target), hl
 	ld (.free_target), hl
@@ -102,7 +102,7 @@ port_old:
 	ld hl, 0
 .free_target := $-3
 	push hl
-	call _free
+	call __free
 	pop hl
 	ret
 .unlockhelper:
@@ -186,5 +186,5 @@ _flash_unlock:
 	ret
 
 
-extern _malloc
-extern _free
+extern __malloc
+extern __free

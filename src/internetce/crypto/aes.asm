@@ -2,6 +2,7 @@
 ; 1 block = 174K cycles
 ; 62 blocks (1KB of data) = 10M cycles =  0.2 sec
 ; That's OK, the most expansive operation is gcm_mult (~120K cyckes)
+; Note: All the (de)ciphering functions support being called with buffer_src == buffer_dst
 
 
 ; ******* equates *******
@@ -116,7 +117,7 @@ aes128gcm:
     ; IX+21(in); length_aad
     ; IX+24(in/out): tag (out on cipher, in on decipher)
     ; IX+27(out): desttext
-    ; If on decipher mode, return 0 on success, 1 on failed TAG check
+    ; If in decipher mode, return 0 on success, 1 on failed TAG check
     di
     ; counter to 1
     xor a, a
@@ -217,20 +218,34 @@ aes128gcm:
     jr nc, .last_round
     push hl
 
+    bit 0, (ix-65)  ; is_ciphering
+    jr z, .decipher_round
+
+    ; Cipher process
     lea hl, ix-64  ; tmp_ciphered
     ld de, (ix+9)  ; sourcetext
     ld bc, (ix+27)  ; desttext
     call gcm_add
 
-    ld de, (ix+9)  ; sourcetext
-    bit 0, (ix-65)  ; is_ciphering
-    jr z, .tag_processing
-    ld de, (ix+27)  ; desttext
-.tag_processing:
+    ld de, (ix+27)  ; desttext (ciphered one)
+    lea hl, ix-48  ; current tag
+    lea bc, ix-48
+    call gcm_add
+    jr .after_is_ciphering
+
+.decipher_round:
+    ; Decipher process
+    ld de, (ix+9)  ; sourcetext (ciphered one)
     lea hl, ix-48  ; current tag
     lea bc, ix-48
     call gcm_add
 
+    lea hl, ix-64  ; tmp_ciphered
+    ld de, (ix+9)  ; sourcetext
+    ld bc, (ix+27)  ; desttext
+    call gcm_add
+
+.after_is_ciphering:
     lea hl, ix-48  ; tag
     lea de, ix-32  ; H
     lea iy, ix-48
@@ -245,24 +260,37 @@ aes128gcm:
     ld (ix+27), hl
 
     pop bc
-    jr .gcm_loop
+    jp .gcm_loop
 
 .last_round:
+    bit 0, (ix-65)  ; is_ciphering
+    jr z, .last_round.decipher_round
+
+    ; Cipher last round
     lea hl, ix-64  ; tmp_ciphered
     ld de, (ix+9)  ; sourcetext
     ld bc, (ix+27)  ; desttext
     call .gcm_add_partial
 
-    ld de, (ix+9)  ; sourcetext
-    bit 0, (ix-65)  ; is_ciphering
-    jr z, .tag_processing_last
-    ld de, (ix+27)  ; desttext
-.tag_processing_last:
+    ld de, (ix+27)  ; desttext (ciphered one)
+    lea hl, ix-48  ; current tag
+    lea bc, ix-48
+    call .gcm_add_partial
+    jr .last_round.after_is_ciphering
 
+.last_round.decipher_round:
+    ; Decipher last round
+    ld de, (ix+9)  ; sourcetext (ciphered one)
     lea hl, ix-48  ; current tag
     lea bc, ix-48
     call .gcm_add_partial
 
+    lea hl, ix-64  ; tmp_ciphered
+    ld de, (ix+9)  ; sourcetext
+    ld bc, (ix+27)  ; desttext
+    call .gcm_add_partial
+
+.last_round.after_is_ciphering:
     lea hl, ix-48  ; tag
     lea de, ix-32  ; H
     lea iy, ix-48

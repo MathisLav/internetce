@@ -22,6 +22,7 @@
 /* A list of the different states of the device */
 typedef enum device_state {
 	STATE_UNKNOWN,
+	STATE_USB_INITIALIZED,
 	STATE_USB_CONNECTED,
 	STATE_USB_ENABLED,
 	STATE_RNDIS_INIT,
@@ -56,6 +57,8 @@ extern uint8_t *src_mac_addr; /* For dhcp purposes (we need to acknowledge the r
 /**
  * Internal functions prototype
  */
+
+void reset_netinfo_struct();
 
 void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_total_size, bool has_eth_header);
 

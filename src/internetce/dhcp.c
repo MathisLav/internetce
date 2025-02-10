@@ -58,7 +58,13 @@ int dhcp_init() {
 		dbg_err("An error occurred in dhcp_init");
 		return -1;
 	}
-	web_ListenPort(CLIENT_DHCP_PORT, fetch_dhcp_msg, NULL);
+	const web_status_t ret_val = web_ListenPort(CLIENT_DHCP_PORT, fetch_dhcp_msg, NULL);
+	if(ret_val != WEB_SUCCESS) {
+		web_PopMessage(dhcp_last_msg_queue);
+		dhcp_last_msg_queue = NULL;
+		dbg_err("An error occurred in dhcp_init");
+		return -2;
+	}
 	netinfo.dhcp_cur_state = DHCP_STATE_INIT;
 	return 0;
 }
@@ -112,6 +118,8 @@ web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 						}
 						web_UnlistenPort(CLIENT_DHCP_PORT);
 						dhcp_init();
+					} else {
+						dbg_err("Unknown DHCP message");
 					}
 					break;
 				case DHCP_OPT_DNS_ID:

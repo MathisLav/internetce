@@ -2,8 +2,10 @@ import sys
 import json
 
 TESTED_SCALARS = ((0, "null"),
-                  (1, "unit"),
-                  (2, "two"),
+                  (0x45315157f2537edc8f620c3d50c34b6e384a81ef09b75c102040b86aa2b9c4d8, "test"),
+                  (0x0100000000000000000000000000000000000000000000000000000000000000, "unit"),
+                  (0x0200000000000000000000000000000000000000000000000000000000000000, "two"),
+                  (0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f, "xargs example"),
                   (0x4040404040404040404040404040404040404040404040404040404040404040, "fourties"),
                   (0x1111111111111111111111111111111111111111111111111111111111111111, "ones"),
                   (0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0, "straight flush"),
@@ -65,12 +67,23 @@ def finv(x):
             p = p*x % (2**255 - 19)
     return p
 
+def encode_scalar(k):
+    print(hex(k))
+    k_list = [k // 2**e % 256 for e in range(0, 249, 8)][::-1]
+    k_list[0] &= 248
+    k_list[31] &= 127
+    k_list[31] |= 64
+    k = sum([k_list[i] << 8*i for i in range(32)])
+    return k
+
 def ladder(point, k):
     # a, b, c, d, e, f
     a = d = 1
     c = 0
     b = point
 
+    k = encode_scalar(k)
+    print(hex(k), end=" => ")
     binary = bin(k)[2:]
     filln = 255 - len(binary)
     binary = ("0" * filln) + binary
@@ -121,11 +134,12 @@ def generate_autotest(filename):
 
     for scalar, hint in TESTED_SCALARS:
         value = ladder(9, scalar)
+        print(hex(value))
         json_dict["hashes"][f"scalar_{hint}"] = {
             "description": f"Point 9, Scalar {hint}",
             "start": hex(0xd40000 + 320*240*2 - 32), "size": "32",
             "expected_CRCs": [hex(crc32_of_list(value))[2:].upper()]}
-        json_dict["sequence"].append(f"delay|5000")    
+        json_dict["sequence"].append(f"delay|6000")    
         json_dict["sequence"].append(f"hashWait|scalar_{hint}")    
         json_dict["sequence"].append("key|enter")
 

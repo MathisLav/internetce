@@ -43,37 +43,37 @@ msg_queue_t *_recursive_PushEthernetFrame(void *buffer, void *data, size_t lengt
 	const size_t min_payload_size = MIN_ETH_HDR_SIZE - (sizeof(eth_frame_t) + 4);  /* = 46 */
 	if(length_data < min_payload_size) {
 		/* Reallocating so it is 64B large */
-		uint8_t *new_buffer = malloc(MIN_ETH_HDR_SIZE + sizeof(rndis_packet_msg_t));
+		uint8_t *new_buffer = _malloc(MIN_ETH_HDR_SIZE + sizeof(rndis_packet_msg_t));
+		if(new_buffer == NULL) {
+			_free(buffer);
+			return NULL;
+		}
 		void *new_data = new_buffer + sizeof(rndis_packet_msg_t) + sizeof(eth_frame_t);
 		memcpy(new_data, data, length_data);
 		memset(new_data + length_data, 0, min_payload_size - length_data);
-		free(buffer);
+		_free(buffer);
 		buffer = new_buffer;
 		data = new_data;
 		length_data = min_payload_size;
 	}
 	if(data - sizeof(eth_frame_t) < buffer) {
 		dbg_err("Can't push ethernet frame");
-		free(buffer);
+		_free(buffer);
 		return NULL;
 	}
 
-	size_t size = length_data + sizeof(eth_frame_t) + 4;
+	const size_t size = length_data + sizeof(eth_frame_t) + 4;
 	eth_frame_t *frame = (eth_frame_t *)(data - sizeof(eth_frame_t));
 	memcpy(frame->MAC_dst, netinfo.router_MAC_addr, 6);
 	memcpy(frame->MAC_src, netinfo.my_MAC_addr, 6);
 	frame->Ethertype = protocol;
-	uint32_t crc = crc32b(frame, size - 4);
+	const uint32_t crc = crc32b(frame, size - 4);
 	memcpy((void *)frame + size - 4, &crc, 4);
 
 	return _recursive_PushRNDISPacket(buffer, frame, size);
 }
 
 uint32_t crc32b(void *data, size_t length) {
-	/**
-	 *	Computes ethernet crc32.
-	 *	Code found on stackoverflow.com (no licence was given to the code)
-	 */
 	const uint32_t crc_poly = 0xEDB88320;
     uint32_t crc;
 	unsigned int i, j;
@@ -97,14 +97,22 @@ bool cmpbroadcast(const uint8_t *mac_addr) {
 }
 
 web_status_t fetch_ethernet_frame(eth_frame_t *frame, size_t length) {
-	if(frame->Ethertype == ETH_IPV4 && !memcmp(frame->MAC_dst, netinfo.my_MAC_addr, 6)) {
-		src_mac_addr = frame->MAC_src;
-		ipv4_packet_t *ipv4_pckt = (ipv4_packet_t *)((uint8_t *)frame + sizeof(eth_frame_t));
-		return fetch_IPv4_packet(ipv4_pckt, length - sizeof(eth_frame_t));
-	} else if(frame->Ethertype == ETH_ARP &&
-			  (!memcmp(frame->MAC_dst, netinfo.my_MAC_addr, 6) || cmpbroadcast(frame->MAC_dst))) {
-		fetch_arp_msg(frame);
+	web_status_t ret_val = WEB_SUCCESS;
+	if(!memcmp(frame->MAC_dst, netinfo.my_MAC_addr, 6) || cmpbroadcast(frame->MAC_dst)) {
+		switch(frame->Ethertype) {
+			case ETH_IPV4:
+				src_mac_addr = frame->MAC_src;
+				ipv4_packet_t *ipv4_pckt = (ipv4_packet_t *)((uint8_t *)frame + sizeof(eth_frame_t));
+				ret_val = fetch_IPv4_packet(ipv4_pckt, length - sizeof(eth_frame_t));
+				break;
+			case ETH_ARP:
+				fetch_arp_msg(frame);
+				break;
+			default:
+				dbg_warn("Unknown Ethertype: 0x%04x", frame->Ethertype);
+				ret_val = WEB_ERROR_FAILED;
+				break;
+		}
 	}
-
-	return WEB_SUCCESS;
+	return ret_val;
 }

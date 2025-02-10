@@ -40,11 +40,11 @@ void update_event_time();
 
 web_status_t dispatch_time_events();
 
-void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
-              web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data);
+web_status_t schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
+                      web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data);
 
-void delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
-                 web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data);
+web_status_t delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
+                         web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data);
 
 web_status_t remove_event(web_callback_data_t *user_data);
 

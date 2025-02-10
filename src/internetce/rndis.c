@@ -55,13 +55,13 @@ web_status_t web_SendRNDISPacket(void *data, size_t length_data) {
 msg_queue_t *_recursive_PushRNDISPacket(void *buffer, void *data, size_t length_data) {
 	if(data - sizeof(rndis_packet_msg_t) != buffer) {
 		dbg_err("Can't push RNDIS packet");
-		free(buffer);
+		_free(buffer);
 		return NULL;
 	}
 
 	if(length_data + sizeof(rndis_packet_msg_t) > rndis_state.max_transfer_size) {
 		dbg_err("Trying to send a too large RNDIS packet");
-		free(buffer);
+		_free(buffer);
 		return NULL;
 	}
 
@@ -83,7 +83,11 @@ void send_control_rndis(void *rndis_msg, size_t length) {
 		.wValue = 0,
 		.wIndex = 0,
 		.wLength = length};
-	void *buffer = malloc(sizeof(usb_control_setup_t) + length);
+	void *buffer = _malloc(sizeof(usb_control_setup_t) + length);
+	if(buffer == NULL) {
+		dbg_err("No memory");
+		return;
+	}
 	void *data = buffer + sizeof(usb_control_setup_t);
 	memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
 	memcpy(data, rndis_msg, length);
@@ -99,7 +103,7 @@ usb_error_t out_control_rndis_callback(usb_endpoint_t endpoint, usb_transfer_sta
 		return USB_ERROR_FAILED;
 	}
 
-	free(data);
+	_free(data);
 	return USB_SUCCESS;
 }
 
@@ -144,7 +148,7 @@ void send_rndis_set_msg(uint32_t oid, const void *value, size_t value_size) {
 
 void send_rndis_keepalive_msg() {
 	if(!rndis_state.has_keepalive_cmplt_received) {
-		dbg_warn("The previous keepalive was unanswered");
+		dbg_warn("Keepalive not received");
 		// Specs would want to do that but hey, as long as everything's working...
 		// send_rndis_reset_msg(); 
 		// return;
@@ -194,7 +198,11 @@ usb_error_t interrupt_handler(usb_endpoint_t endpoint, usb_transfer_status_t sta
 		return USB_ERROR_FAILED;
 	}
 
-	uint8_t *buffer = malloc(RNDIS_CONTROL_BUFFER);
+	uint8_t *buffer = _malloc(RNDIS_CONTROL_BUFFER);
+	if(buffer == NULL) {
+		dbg_err("No memory");
+		return USB_ERROR_FAILED;
+	}
 	usb_ScheduleDefaultControlTransfer(netinfo.device, &in_setup_buffer, buffer, ctrl_rndis_callback, buffer);
 	poll_interrupt_scheduler();
 
@@ -205,7 +213,7 @@ usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t s
 								usb_transfer_data_t *data) {
 	(void)transferred; (void)endpoint;  /* Unused parameter */
 
-	free(data);
+	_free(data);
 
 	if(status & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (ctrl)");
@@ -248,7 +256,10 @@ usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t s
 				Send Keepalives every SEND_KEEPALIVE_INTERVAL (5s).
 				For now, keepalives are sent no matter if messages have been received in between.
 			*/
-			schedule(SEND_KEEPALIVE_INTERVAL, send_keepalive_scheduler, NULL, SEND_KEEPALIVE_SCHED_ID);
+			web_status_t ret_val = schedule(SEND_KEEPALIVE_INTERVAL, send_keepalive_scheduler, NULL, SEND_KEEPALIVE_SCHED_ID);
+			if(ret_val != WEB_SUCCESS) {
+				dbg_err("Failed to schedule keepalive");
+			}
 			break;
 		case RNDIS_RESET_CMPLT:
 			dbg_info("Received reset cmplt");

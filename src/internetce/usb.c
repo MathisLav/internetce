@@ -25,7 +25,7 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 				netinfo.state = STATE_USB_ENABLED;
 			} else {
 				usb_DisableDevice(netinfo.device);
-				netinfo.state = STATE_UNKNOWN;
+				netinfo.state = STATE_USB_INITIALIZED;
 			}
 			break;
 		case USB_DEVICE_DISABLED_EVENT:
@@ -40,7 +40,7 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 
 	/**
 	 * Feeding the Random Number Generator module with the current timer value.
-	 * Only doing this a the beggining, when we need fast (but not perfect) entropy.
+	 * Only doing this at the beggining, when we need fast (but not perfect) entropy.
 	 * Then, better entropy is given by the timing the lib receives USB packets.
 	 */
 	if(!rng_IsAvailable()) {
@@ -127,7 +127,7 @@ web_status_t configure_usb_device() {
 
 	/* If one is missing, ignoring the device */
 	if(netinfo.ep_wc_in == 0 || netinfo.ep_cdc_in == 0 || netinfo.ep_cdc_out == 0) {
-		netinfo.state = STATE_UNKNOWN;
+		netinfo.state = STATE_USB_INITIALIZED;
 		netinfo.ep_wc_in = 0;
 		netinfo.ep_cdc_in = 0;
 		netinfo.ep_cdc_out = 0;
@@ -156,11 +156,11 @@ usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t stat
 	if(status & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (pckt)");
 		netinfo.state = STATE_USB_LOST;
-		free(packet);
+		_free(packet);
 		return USB_ERROR_FAILED;
 	} else if(status != USB_SUCCESS) {
 		dbg_warn("Packet callback returned %u", status);
-		free(packet);
+		_free(packet);
 		return USB_SUCCESS;
 	}
 
@@ -175,6 +175,6 @@ usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t stat
 		cur_packet = cur_packet + sizeof(rndis_packet_msg_t) + ((rndis_packet_msg_t *)cur_packet)->DataLength;
 	}
 
-	free(packet);
+	_free(packet);
 	return USB_SUCCESS;
 }

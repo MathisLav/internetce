@@ -84,7 +84,7 @@ int main(void)
 
 	web_port_t client_port = web_RequestPort();
 	msg_queue_t *queued = web_PushUDPDatagram(query, length, 0x08080808, client_port, DNS_PORT);
-	free(query);
+	_free(query);
 	web_ListenPort(client_port, user_dns_callback, queued);
 
 	while(!os_GetCSC() && !ended) { // ended : global variable

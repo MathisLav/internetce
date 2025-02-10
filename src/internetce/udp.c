@@ -41,7 +41,7 @@ msg_queue_t *_recursive_PushUDPDatagram(void *buffer, void *data, size_t length_
 											   web_port_t port_src, web_port_t port_dst) {
 	if(data - sizeof(udp_datagram_t) < buffer) {
 		dbg_err("Can't push UDP datagram");
-		free(buffer);
+		_free(buffer);
 		return NULL;
 	}
 
@@ -62,7 +62,12 @@ msg_queue_t *_recursive_PushUDPDatagram(void *buffer, void *data, size_t length_
 
 web_status_t fetch_udp_datagram(udp_datagram_t *datagram, size_t length, uint32_t ip_src, uint32_t ip_dst) {
 	if(!datagram->checksum || !transport_checksum((uint8_t*)datagram, length, ip_src, ip_dst, UDP_PROTOCOL)) {
-		return call_callbacks(UDP_PROTOCOL, datagram, length, datagram->port_dst / 256 + datagram->port_dst * 256);
+		const int nb_matches = call_callbacks(UDP_PROTOCOL, datagram, length, htons(datagram->port_dst));
+		/* For now, no further processing is done, but it should send an ICMP port unreachable packet */
+		if(nb_matches <= 0) {
+			dbg_warn("No callback found for port %u", htons(datagram->port_dst));
+		}
+		return WEB_SUCCESS;
 	} else {
 		dbg_warn("Received bad checksumed UDP packet");
 		return WEB_ERROR_FAILED;

@@ -5,6 +5,7 @@
 #include "include/transport_layer.h"
 #include "include/core.h"
 #include "include/ipv4.h"
+#include "include/debug.h"
 
 
 /**********************************************************************************************************************\
@@ -23,16 +24,21 @@ web_port_t web_RequestPort() {
 	return next_port ? next_port++ : 0;
 }
 
-void web_ListenPort(web_port_t port, web_port_callback_t *callback, web_callback_data_t *user_data) {
-	port_list_t *new_port = malloc(sizeof(port_list_t));
+web_status_t web_ListenPort(web_port_t port, web_port_callback_t *callback, web_callback_data_t *user_data) {
+	port_list_t *new_port = _malloc(sizeof(port_list_t));
+	if(new_port == NULL) {
+		return WEB_NOT_ENOUGH_MEM;
+	}
 	new_port->port = port;
 	new_port->callback = callback;
 	new_port->callback_data = user_data;
 	new_port->next = listened_ports;
 	listened_ports = new_port;
+	return WEB_SUCCESS;
 }
 
-void web_UnlistenPort(web_port_t port) {
+web_status_t web_UnlistenPort(web_port_t port) {
+	web_status_t ret_val = WEB_ERROR_FAILED;
 	port_list_t *cur_port = listened_ports;
 	port_list_t *prev_port = NULL;
 	port_list_t *next_port = NULL;
@@ -44,28 +50,32 @@ void web_UnlistenPort(web_port_t port) {
 			} else {
 				listened_ports = cur_port->next;
 			}
-			free(cur_port);
+			_free(cur_port);
+			ret_val = WEB_SUCCESS;
 		}
 		prev_port = cur_port;
 		cur_port = next_port;
 	}
+	return ret_val;
 }
 
 /**********************************************************************************************************************\
  *                                                  Private functions                                                 *
 \**********************************************************************************************************************/
 
-web_status_t call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port) {
+int call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port) {
+	int nb_matches = 0;
 	port_list_t *cur_listenedPort = listened_ports;
 	while(cur_listenedPort) {
 		if(port == cur_listenedPort->port) {
+			nb_matches++;
 			if(cur_listenedPort->callback(port, protocol, data, length, cur_listenedPort->callback_data) != WEB_IGNORE){
 				break;
             }
 		}
 		cur_listenedPort = cur_listenedPort->next;
 	}
-	return WEB_SUCCESS;
+	return nb_matches;
 }
 
 uint16_t transport_checksum(void *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {

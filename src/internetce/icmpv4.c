@@ -36,7 +36,10 @@ web_status_t web_Ping(uint32_t ip_dst) {
 	}
 
 	bool is_timeout = false;
-	delay_event(TIMEOUT_PING * 1000, boolean_scheduler, boolean_destructor, &is_timeout);
+	web_status_t ret_val = delay_event(TIMEOUT_PING * 1000, boolean_scheduler, boolean_destructor, &is_timeout);
+	if(ret_val != WEB_SUCCESS) {
+		return ret_val;
+	}
 	waiting_ping = ip_dst;
 	while(waiting_ping == ip_dst) {
 		web_WaitForEvents();
@@ -56,6 +59,11 @@ web_status_t web_Ping(uint32_t ip_dst) {
 \**********************************************************************************************************************/
 
 web_status_t fetch_icmpv4_msg(icmpv4_echo_t *msg, size_t length, uint32_t ip_src) {
+	/*
+	 * Note: Given the RNDIS restrictions (which is just a LAN behind NAT/PAT rules, with no personal public IP),
+	 * we can't really receive ICMP packets from the outside world, even from the local "home network" devices.
+	 * But it may be possible later if the library supports other physical layer types (Wi-Fi, ECM, etc).
+	 */
 	if(msg->type == ICMP_ECHO_REQUEST && msg->code == 0) {
 		dbg_info("Received ping request from 0x%lx", ip_src);
 		msg->type = ICMP_ECHO_REPLY;

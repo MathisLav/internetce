@@ -32,15 +32,11 @@ static void *msg_buffer = NULL;
 
 void web_Init() {
 	srand(rtc_Time());
+	reset_netinfo_struct();
+	netinfo.state = STATE_USB_INITIALIZED;
 	uint8_t default_mac[6] = DEFAULT_MAC_ADDRESS;
 	default_mac[5] = randInt(0, 0xFF);
 	memcpy(netinfo.my_MAC_addr, default_mac, 6);
-	netinfo.ep_wc_in = 0;
-	netinfo.ep_cdc_in = 0;
-	netinfo.ep_cdc_out = 0;
-	netinfo.state = STATE_UNKNOWN;
-	netinfo.device = NULL;
-	netinfo.IP_addr = 0;
 	memset(netinfo.router_MAC_addr, 0xFF, 6);
 	flash_setup();
 	rng_Init();
@@ -49,17 +45,15 @@ void web_Init() {
 }
 
 void web_Cleanup() {
-	/* Freeing listened_ports */
-	port_list_t *cur_port = listened_ports;
-	port_list_t *next_port = NULL;
-	while(cur_port) {
-		next_port = cur_port->next;
-		free(cur_port);
-		cur_port = next_port;
-	}
-
-	/* Freeing send_queue */
-	flush_event_list();
+	/**
+	 * If no connection is ingoing, there should be 3 allocated memories:
+	 * 	- msg_buffer (used to receive the incoming packets)
+	 * 	- The listen structure for port 0x44 (DHCP)
+	 * 	- The event structure for RNDIS keepalives
+	 * There might be more memory allocated if:
+	 *  - An HTTP request was made (and created a http_data_list_t structure)
+	 * 	- A TCP connection is still active
+	 */
 
 	/* Freeing the appvars used for saving what the lib receives */
 	http_data_list_t *cur_data = http_data_list;
@@ -67,11 +61,39 @@ void web_Cleanup() {
 	while(cur_data) {
 		next_data = cur_data->next;
 		ti_Delete(cur_data->varname);
-		free(cur_data);
+		_free(cur_data);
 		cur_data = next_data;
 	}
+	http_data_list = NULL;
+
+	/* Freeing send_queue */
+	flush_event_list();
+
+
+	/* Removing all pending TCP connections */
+	flush_tcp_connections();
+
+	/* Freeing listened_ports */
+	port_list_t *cur_port = listened_ports;
+	port_list_t *next_port = NULL;
+	while(cur_port) {
+		next_port = cur_port->next;
+		_free(cur_port);
+		cur_port = next_port;
+	}
+	listened_ports = NULL;
+
+	reset_netinfo_struct();
 
 	usb_Cleanup();
+
+	if(msg_buffer != NULL) {
+		_free(msg_buffer);
+		msg_buffer = NULL;
+	}
+
+	/* Debugging feature, more or less a valgrind for calculator */
+	print_allocated_memory();
 }
 
 uint32_t web_getMyIPAddr() {
@@ -86,6 +108,9 @@ web_status_t web_WaitForEvents() {
 	web_status_t ret_val = WEB_SUCCESS;
 
 	switch(netinfo.state) {
+		case STATE_UNKNOWN:
+			/* Nothing to do */
+			return WEB_SUCCESS;
 		case STATE_USB_LOST:
 			web_Cleanup();
 			web_Init();
@@ -93,7 +118,7 @@ web_status_t web_WaitForEvents() {
 		
 		case STATE_USB_ENABLED:
 			if(configure_usb_device() != WEB_SUCCESS) {
-				netinfo.state = STATE_UNKNOWN;
+				netinfo.state = STATE_USB_INITIALIZED;
 			} else {
 				netinfo.state = STATE_RNDIS_INIT;
 			}
@@ -110,12 +135,17 @@ web_status_t web_WaitForEvents() {
 		case STATE_NETWORK_CONFIGURED: {
 			/* Retrieving potential messages */
 			if(msg_buffer == NULL) {
-				msg_buffer = malloc(MAX_RNDIS_TRANSFER_SIZE);  /* All the headers should take max 102B */
+				msg_buffer = _malloc(MAX_RNDIS_TRANSFER_SIZE);  /* All the headers should take max 102B */
+				if(msg_buffer == NULL) {
+					dbg_err("No memory left");
+					return WEB_NOT_ENOUGH_MEM;
+				}
 				usb_error_t err = usb_ScheduleTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_in),
 													   msg_buffer, MAX_RNDIS_TRANSFER_SIZE, packets_callback, &msg_buffer);
 				if(err != USB_SUCCESS) {
 					dbg_warn("USB err: %u", err);
-					ret_val = WEB_USB_ERROR;
+					_free(msg_buffer);
+					return WEB_USB_ERROR;
 				}
 			}
 
@@ -136,16 +166,22 @@ web_status_t web_WaitForEvents() {
 }
 
 msg_queue_t *web_PushMessage(void *msg, size_t length) {
-	msg_queue_t *new_msg = malloc(sizeof(msg_queue_t));
+	msg_queue_t *new_msg = _malloc(sizeof(msg_queue_t));
 	if(new_msg == NULL) {
-		free(msg);
+		_free(msg);
 		return NULL;
 	}
 	new_msg->length = length;
 	new_msg->msg = msg;
 	new_msg->send_once = false;  // Modified in upper layers if needed
 	new_msg->endpoint = usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_cdc_out);
-	schedule(SEND_EVERY, send_packet_scheduler, send_packet_destructor, new_msg);
+	web_status_t ret_val = schedule(SEND_EVERY, send_packet_scheduler, send_packet_destructor, new_msg);
+	if(ret_val != WEB_SUCCESS) {
+		_free(msg);
+		_free(new_msg);
+		dbg_err("Failed to schedule message");
+		return NULL;
+	}
 	return new_msg;
 }
 
@@ -158,9 +194,18 @@ inline void web_PopMessage(msg_queue_t *msg) {
  *                                                  Private functions                                                  *
 \**********************************************************************************************************************/
 
+void reset_netinfo_struct() {
+	netinfo.ep_wc_in = 0;
+	netinfo.ep_cdc_in = 0;
+	netinfo.ep_cdc_out = 0;
+	netinfo.state = STATE_UNKNOWN;
+	netinfo.device = NULL;
+	netinfo.IP_addr = 0;
+}
+
 void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_total_size, bool has_eth_header) {
 	const size_t size = length_data + headers_total_size;
-	void *buffer = malloc(size);
+	void *buffer = _malloc(size);
 	if(buffer == NULL) {
 		dbg_err("No memory left");
 		return NULL;
@@ -186,6 +231,6 @@ web_status_t send_packet_scheduler(web_callback_data_t *user_data) {
 
 void send_packet_destructor(web_callback_data_t *user_data) {
 	msg_queue_t *msg = (msg_queue_t *)user_data;
-	free(msg->msg);
-	free(msg);
+	_free(msg->msg);
+	_free(msg);
 }

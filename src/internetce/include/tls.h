@@ -7,6 +7,14 @@
 
 #include <internet.h>
 #include "core.h"
+#include "crypto.h"
+
+
+/**
+ * External structures
+ */
+
+extern cipher_callbacks_t aes128gcm_callbacks;
 
 /**
  * Constants
@@ -16,13 +24,11 @@
 #define TLS_VERSION_1_2					htons(0x0303)
 #define TLS_VERSION_1_3					htons(0x0304)
 
-#define TLS_HANDSHAKE_CLIENT_HELLO_TYPE	0x01
-
-#define NUMBER_SUPPORTED_CIPHER_SUITS	2
+#define NUMBER_SUPPORTED_CIPHER_SUITES	2
 #define TLS_AES_128_GCM_SHA256			htons(0x1301)
 #define TLS_EMPTY_RENEGOTIATION_INFO_SCSV htons(0x00ff)
-#define LIST_SUPPORTED_CIPHER_SUITS 	{TLS_AES_128_GCM_SHA256, TLS_EMPTY_RENEGOTIATION_INFO_SCSV}
-#define SIZE_CIPHER_SUITS               (NUMBER_SUPPORTED_CIPHER_SUITS * sizeof(uint16_t))
+#define LIST_SUPPORTED_CIPHER_SUITES 	{TLS_AES_128_GCM_SHA256, TLS_EMPTY_RENEGOTIATION_INFO_SCSV}
+#define SIZE_CIPHER_SUITES               (NUMBER_SUPPORTED_CIPHER_SUITES * sizeof(uint16_t))
 
 #define NUMBER_SUPPORTED_GROUPS			1
 #define GROUP_EC_X25519					htons(0x001d)
@@ -48,19 +54,16 @@
 
 #define TLS_SERVER_NAME_MAX_LENGTH		256
 
-#define TOTAL_EXTENSIONS_SIZE			(sizeof(tls_supported_versions_ce_t) + sizeof(tls_ec_point_formats_ce_t) + \
-										 sizeof(tls_supported_groups_ce_t) + sizeof(tls_signature_algo_ce_t) + \
-										 sizeof(tls_session_ticket_ce_t) + sizeof(tls_extended_msecret_ce_t) + \
-										 sizeof(tls_key_share_ce_t) + sizeof(tls_server_name_ce_t))
+#define TOTAL_EXTENSIONS_SIZE (sizeof(tls_supported_versions_ce_t) + sizeof(tls_ec_point_formats_ce_t) + \
+							   sizeof(tls_supported_groups_ce_t) + sizeof(tls_signature_algo_ce_t) + \
+							   sizeof(tls_key_share_ce_t) + sizeof(tls_alpn_ce_t) + sizeof(tls_session_ticket_ce_t) + \
+							   sizeof(tls_extended_msecret_ce_t) + sizeof(tls_record_size_limit_ce_t) + \
+							   sizeof(tls_server_name_ce_t))
+
+
 /**
  * Internal structures
  */
-
-typedef struct tls_exchange {
-	size_t received_length;
-	tls_record_t *record;				/**< Where to put the result: must be record_length long			*/
-	tcp_exchange_t *tcp_exch;
-} tls_exchange_t;
 
 typedef struct tls_supported_versions_ce {
 	uint16_t extension_id;      /**< 0x002b */
@@ -102,8 +105,9 @@ typedef struct tls_key_share_ce {
 typedef struct tls_alpn_ce {
 	uint16_t extension_id;		/**< 0x0010	*/
 	uint16_t extension_length;	/**< 11		*/
-	uint8_t http_1_1_length;	/**< 9		*/
-	uint8_t http_1_1_id[9];		/*< http/1.1 */
+	uint16_t data_length;		/**< 9		*/
+	uint8_t http_1_1_length;	/**< 8		*/
+	uint8_t http_1_1_id[8];		/*< http/1.1 */
 } tls_alpn_ce_t;
 
 typedef struct tls_session_ticket_ce {
@@ -139,8 +143,8 @@ typedef struct tls_handshake_ce {
 	uint8_t random[32];
 	uint8_t session_id_length;		/**< Session ID not used in TLS 1.3				*/
 	uint8_t session_id[32];
-	uint16_t cipher_suit_length;
-    uint16_t cipher_suits[NUMBER_SUPPORTED_CIPHER_SUITS];
+	uint16_t cipher_suite_length;
+    uint16_t cipher_suites[NUMBER_SUPPORTED_CIPHER_SUITES];
     uint8_t comp_methods_length;    /**< Always 1                                   */
     uint8_t null_compression;       /**< no compression methods in TLS 1.3			*/
 	uint16_t extensions_length;
@@ -161,13 +165,25 @@ typedef struct tls_handshake_ce {
  * Internal functions prototype
  */
 
-web_status_t _recursive_PushTLSRecord(void *buffer, void *data, size_t length_data, tcp_exchange_t *tcp_exch,
-									  uint8_t opaque_type);
+web_status_t _recursive_DeliverTLSRecord(tls_exchange_t *tls_exch, void *buffer, void *data, size_t length_data,
+									  	 uint8_t opaque_type);
 
-web_status_t fetch_tls_part(web_port_t port, uint8_t protocol, void *data, size_t length,
+web_status_t fetch_handshake_extensions(const uint8_t extensions[], size_t length, const uint8_t **server_public_key);
+
+web_status_t fetch_server_hello(tls_exchange_t *tls_exch, tls_handshake_t *server_hello, size_t length);
+
+web_status_t fetch_server_finished(tls_exchange_t *tls_exch, tls_finished_t *server_finished, size_t length);
+
+web_status_t fetch_handshake_message(tls_exchange_t *tls_exch, tls_handshake_t *handshake_msg, size_t length);
+
+web_status_t fetch_tls_record(tls_exchange_t *tls_exch, void *payload, size_t length, tls_content_type_t content_type);
+
+web_status_t fetch_tls_encrypted_record(tls_exchange_t *tls_exch, tls_record_t *record, size_t record_length);
+
+web_status_t fetch_tls_part(web_port_t port, link_msg_type_t msg_type, void *data, size_t length,
 						    web_callback_data_t *user_data);
 
-web_status_t fetch_tls_record(tls_exchange_t *tls_exch);
+void _free_tls_connection(tls_exchange_t *tls_exch);
 
 
 #endif // INTERNET_TLS
