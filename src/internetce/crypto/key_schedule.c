@@ -6,28 +6,35 @@
 #include "../include/debug.h"
 
 
-web_status_t add_transcript_message(linked_transcript_msg_t **transcript, tls_record_t *record) {
+web_status_t add_transcript_message(linked_transcript_msg_t **transcript, const void *data, size_t size, tls_sender_t sender) {
     /* Note: Messages are already in the correct order (ordering is expected by the TLS client FSM) */
-    void *data = _malloc(ntohs(record->length));
-    if(data == NULL) {
+    void *buffer = _malloc(size);
+    if(buffer == NULL) {
         return WEB_NOT_ENOUGH_MEM;
     }
-    memcpy(data, record->data, ntohs(record->length));
+    memcpy(buffer, data, size);
     linked_transcript_msg_t *adding = _malloc(sizeof(linked_transcript_msg_t));
     if(adding == NULL) {
-        _free(data);
+        _free(buffer);
         return WEB_NOT_ENOUGH_MEM;
     }
-    adding->length = ntohs(record->length);
-    adding->data = data;
-    adding->next = NULL;  /* Adding the element at the end of the linked list */
+    adding->length = size;
+    tls_hs_msg_type_t hs_type = ((tls_handshake_t *)data)->hs_type;
+    if(hs_type <= TLS_HS_TYPE_SERVER_HELLO) {
+        /* Edge case for the way I've chosen to order HS messages... is there any better solution? */
+        adding->msg_type = (tls_hs_sender_msg_type_t)hs_type;
+    } else {
+        adding->msg_type = (tls_hs_sender_msg_type_t)TO_HS_SENDER_TYPE(hs_type, sender);
+    }
+    adding->data = buffer;
 
     linked_transcript_msg_t *current = *transcript;
     linked_transcript_msg_t *prev = NULL;
-    while(current != NULL) {
+    while(current != NULL && current->msg_type < adding->msg_type) {
         prev = current;
         current = current->next;
     }
+    adding->next = current;
     if(prev != NULL) {
         prev->next = adding;
     } else {
@@ -39,16 +46,18 @@ web_status_t add_transcript_message(linked_transcript_msg_t **transcript, tls_re
     return WEB_SUCCESS;
 }
 
-web_status_t compute_transcript_hash(const linked_transcript_msg_t *transcript, tls_hs_msg_type_t until, uint8_t hash[]) {
+web_status_t compute_transcript_hash(const linked_transcript_msg_t *transcript, tls_hs_sender_msg_type_t until, uint8_t hash[]) {
     const web_status_t status = sha256_Init();
     if(status != WEB_SUCCESS) {
         return status;
     }
     
-    const linked_transcript_msg_t *message = transcript;
-    while(message != NULL && ((tls_handshake_t *)message->data)->hs_type <= until) {
-        sha256_Part(message->data, message->length);
-        message = message->next;
+    if(transcript != NULL) {
+        const linked_transcript_msg_t *message = transcript;
+        while(message != NULL && message->msg_type <= until) {
+            sha256_Part(message->data, message->length);
+            message = message->next;
+        }
     }
 
     return sha256_Hash(hash);
@@ -99,7 +108,7 @@ web_status_t compute_handshake_secret(const linked_transcript_msg_t *transcript,
         return status;
     }
     
-    status = compute_transcript_hash(transcript, TLS_HS_TYPE_SERVER_HELLO, hash);
+    status = compute_transcript_hash(transcript, TLS_HS_SERVER_SERVER_HELLO, hash);
     if(client_hs_traffic_secret != NULL && status == WEB_SUCCESS) {
         status = hkdf_ExpandLabel(secret, "c hs traffic", hash, CIPHER_SUITE_HASH_SIZE, client_hs_traffic_secret, CIPHER_SUITE_HASH_SIZE);
     }
@@ -132,7 +141,7 @@ web_status_t compute_master_secret(const linked_transcript_msg_t *transcript, ui
     }
 
     if(client_ap_traffic_secret != NULL) {
-        status = compute_transcript_hash(transcript, TLS_HS_TYPE_FINISHED, hash);
+        status = compute_transcript_hash(transcript, TLS_HS_SERVER_FINISHED, hash);
         if(status == WEB_SUCCESS) {
             status = hkdf_ExpandLabel(secret, "c ap traffic", hash, CIPHER_SUITE_HASH_SIZE, client_ap_traffic_secret, CIPHER_SUITE_HASH_SIZE);
         }
@@ -141,7 +150,7 @@ web_status_t compute_master_secret(const linked_transcript_msg_t *transcript, ui
         }
     }
     if(server_ap_traffic_secret != NULL) {
-        status = compute_transcript_hash(transcript, TLS_HS_TYPE_FINISHED, hash);
+        status = compute_transcript_hash(transcript, TLS_HS_SERVER_FINISHED, hash);
         if(status == WEB_SUCCESS) {
             status = hkdf_ExpandLabel(secret, "s ap traffic", hash, CIPHER_SUITE_HASH_SIZE, server_ap_traffic_secret, CIPHER_SUITE_HASH_SIZE);
         }

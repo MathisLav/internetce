@@ -83,7 +83,7 @@ web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t 
 			web_PopMessage(queued);
 			return WEB_NOT_ENOUGH_MEM;
 		}
-		// print_tcp_info((tcp_segment_t *)(queued->msg + IPV4_HEADERS_SIZE - 4), tcp_exch, to_send + sizeof(tcp_segment_t) + opt_size, true);
+		print_tcp_info((tcp_segment_t *)(queued->msg + IPV4_HEADERS_SIZE - 4), tcp_exch, to_send + sizeof(tcp_segment_t) + opt_size, true);
 
 		if(cur_flags & (FLAG_TCP_FIN | FLAG_TCP_SYN)) {
 			/* The next ack number will be incremented */
@@ -450,7 +450,6 @@ web_status_t add_in_segment(tcp_exchange_t *tcp_exch, tcp_segment_t *segment, si
 	new_segment_item->payload = response;
 
 	if(tcp_exch->tcp_state >= TCP_STATE_ESTABLISHED && new_segment_item->relative_sn < tcp_exch->cur_ackn - tcp_exch->beg_ackn) {
-		dbg_info("Segment received twice");
 		if(new_segment_item->payload != NULL) {
 			_free(new_segment_item->payload);
 		}
@@ -466,7 +465,6 @@ web_status_t add_in_segment(tcp_exchange_t *tcp_exch, tcp_segment_t *segment, si
 		seg_after = seg_after->next;
 	}
 	if(seg_after && seg_after->relative_sn == new_segment_item->relative_sn) {  /* deja vue */
-		dbg_info("Segment received twice");
 		if(new_segment_item->payload != NULL) {
 			_free(new_segment_item->payload);
 		}
@@ -519,7 +517,7 @@ web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, 
 	}
 
     tcp_exchange_t *tcp_exch = (tcp_exchange_t *)user_data;
-	// print_tcp_info(data, tcp_exch, length, false);  /* Only displayed when debug is enabled */
+	print_tcp_info(data, tcp_exch, length, false);  /* Only displayed when debug is enabled */
 
 	tcp_segment_t *tcp_seg = (tcp_segment_t *)data;
 	void *payload_addr = get_payload_addr(data);

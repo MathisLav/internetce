@@ -170,6 +170,8 @@ web_status_t _recursive_DeliverTLSRecord(tls_exchange_t *tls_exch, void *buffer,
 
 web_status_t fetch_handshake_extensions(const uint8_t extensions[], size_t length, const uint8_t **server_public_key);
 
+web_status_t compute_cipher_data(tls_exchange_t *tls_exch);
+
 web_status_t fetch_server_hello(tls_exchange_t *tls_exch, tls_handshake_t *server_hello, size_t length);
 
 web_status_t fetch_server_finished(tls_exchange_t *tls_exch, tls_finished_t *server_finished, size_t length);

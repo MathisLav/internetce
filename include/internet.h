@@ -192,6 +192,32 @@ typedef enum tls_hs_msg_type {
 	TLS_HS_TYPE_MESSAGE_HASH			= 254
 } tls_hs_msg_type_t;
 
+typedef enum tls_sender {
+	TLS_SENDER_SERVER					= 0 << 7,
+	TLS_SENDER_CLIENT					= 1 << 7,
+} tls_sender_t;
+
+#define TO_HS_SENDER_TYPE(msg, sender) ((msg << 1) | sender)
+
+/**
+ * List only the messages that can be in the transcript hash (ie that can be received during the TLS handshake)
+ * Note: Because TLS chose not to be logical, messages are not in ascendant order (cert. request > server cert. verify)
+ * 		 But this is 'ok' because the transcript hash is not computed around those edge cases
+ */
+typedef enum tls_hs_sender_msg_type {
+	TLS_HS_CLIENT_CLIENT_HELLO			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CLIENT_HELLO, 			0),
+	TLS_HS_SERVER_SERVER_HELLO			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_SERVER_HELLO, 			0),
+	TLS_HS_SERVER_ENCRYPTED_EXTENSIONS	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_ENCRYPTED_EXTENSIONS, 	TLS_SENDER_SERVER),
+	TLS_HS_SERVER_CERTIFICATE_REQUEST	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_REQUEST, 	TLS_SENDER_SERVER),
+	TLS_HS_SERVER_CERTIFICATE			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE, 			TLS_SENDER_SERVER),
+	TLS_HS_SERVER_CERTIFICATE_VERIFY	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_VERIFY, 	TLS_SENDER_SERVER),
+	TLS_HS_SERVER_FINISHED				= TO_HS_SENDER_TYPE(TLS_HS_TYPE_FINISHED, 				TLS_SENDER_SERVER),
+	TLS_HS_CLIENT_END_OF_EARLY_DATA		= TO_HS_SENDER_TYPE(TLS_HS_TYPE_END_OF_EARLY_DATA, 		TLS_SENDER_CLIENT),
+	TLS_HS_CLIENT_CERTIFICATE			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE, 			TLS_SENDER_CLIENT),
+	TLS_HS_CLIENT_CERTIFICATE_VERIFY	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_VERIFY, 	TLS_SENDER_CLIENT),
+	TLS_HS_CLIENT_FINISHED				= TO_HS_SENDER_TYPE(TLS_HS_TYPE_FINISHED, 				TLS_SENDER_CLIENT),
+} tls_hs_sender_msg_type_t;
+
 
 /**
  * A pointer to web_callback_data_t is passed in the different
@@ -574,6 +600,7 @@ typedef struct tcp_exchange_list {
 
 typedef struct linked_transcript_msg {
 	size_t length;
+	tls_hs_sender_msg_type_t msg_type;
     void *data;
     struct linked_transcript_msg *next;
 } linked_transcript_msg_t;

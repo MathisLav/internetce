@@ -131,9 +131,9 @@ web_status_t hkdf_HMAC(const uint8_t key[], size_t key_size, const uint8_t msg[]
 
 /* Key Schedule */
 
-web_status_t add_transcript_message(linked_transcript_msg_t **transcript, tls_record_t *record);
+web_status_t add_transcript_message(linked_transcript_msg_t **transcript, const void *data, size_t size, tls_sender_t sender);
 
-web_status_t compute_transcript_hash(const linked_transcript_msg_t *transcript, tls_hs_msg_type_t until, uint8_t hash[]);
+web_status_t compute_transcript_hash(const linked_transcript_msg_t *transcript, tls_hs_sender_msg_type_t until, uint8_t hash[]);
 
 web_status_t compute_early_secret(const linked_transcript_msg_t *transcript, uint8_t current_secret[], const uint8_t psk[],
                                   size_t psk_length, uint8_t binder_key[], uint8_t client_early_traffic_secret[],

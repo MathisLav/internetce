@@ -240,8 +240,20 @@ web_status_t web_SendTLSAlert(tls_exchange_t *tls_exch, tls_alert_description_t 
 
 web_status_t appli_callback(web_port_t port, link_msg_type_t msg_type, void *msg, size_t length, web_callback_data_t *user_data) {
 	(void)port; (void)msg_type; (void)msg; (void)user_data;
-	printf("RCVED: %u\n", length);
-	pause();
+	switch(msg_type) {
+		case LINK_MSG_TYPE_DATA:
+			printf("RCVED: %.*s\n", length, (char *)msg);
+			break;
+		case LINK_MSG_TYPE_RST:
+			printf("DATA RST\n");
+			break;
+		case LINK_MSG_TYPE_FIN:
+			printf("DATA FIN\n");
+			break;
+		default:
+			printf("DATA ???\n");
+			break;
+	}
 	return WEB_SUCCESS;
 }
 
@@ -265,27 +277,28 @@ web_status_t _recursive_DeliverTLSRecord(tls_exchange_t *tls_exch, void *buffer,
 		return WEB_NOT_ENOUGH_MEM;
 	}
 
+	if(tls_exch->tls_state < TLS_STATE_CONNECTED) {
+		add_transcript_message(&tls_exch->transcript, data, length_data, TLS_SENDER_CLIENT);
+	}
+
 	/* Filling the TLS record header */
-	size_t size = length_data + sizeof(tls_record_t);
 	tls_record_t *tls_record = (tls_record_t *)(data - sizeof(tls_record_t));
 	tls_record->legacy_version = TLS_VERSION_1_2;
-	tls_record->length = htons(length_data);
 
 	if(tls_exch->tls_state >= TLS_STATE_WAIT_ENCRYPTED_EXTENSIONS) {  /* If encrypted */
-		size += 1 /* Content type */ + tls_exch->cipher_callbacks->extra_size;
+		const size_t ciphered_length = length_data + 1 /* Content type */ + tls_exch->cipher_callbacks->extra_size;
 		((uint8_t *)data)[length_data] = opaque_type;
 		tls_record->opaque_type = TLS_APPLI_DATA_TYPE;
+		tls_record->length = htons(ciphered_length);
 		tls_exch->cipher_callbacks->cipher(data, data, length_data + 1 /* Content type */, tls_record,
 										   sizeof(tls_record_t), tls_exch->cipher_data);
+		length_data = ciphered_length;
 	} else {
 		tls_record->opaque_type = opaque_type;
+		tls_record->length = htons(length_data);
 	}
 
-	if(tls_exch->tls_state < TLS_STATE_CONNECTED) {
-		add_transcript_message(&tls_exch->transcript, tls_record);
-	}
-
-	return web_DeliverTCPSegment(tls_exch->tcp_exch, tls_record, size, FLAG_TCP_PSH | FLAG_TCP_ACK);
+	return web_DeliverTCPSegment(tls_exch->tcp_exch, tls_record, length_data + sizeof(tls_record_t), FLAG_TCP_PSH | FLAG_TCP_ACK);
 }
 
 web_status_t fetch_handshake_extensions(const uint8_t *extensions, size_t length, const uint8_t **server_public_key) {
@@ -317,6 +330,31 @@ web_status_t fetch_handshake_extensions(const uint8_t *extensions, size_t length
 	}
 
 	return WEB_SUCCESS;
+}
+
+web_status_t compute_cipher_data(tls_exchange_t *tls_exch) {
+	web_status_t status;
+	uint8_t cipher_key[tls_exch->cipher_callbacks->key_size];
+	uint8_t cipher_iv[tls_exch->cipher_callbacks->iv_size];
+	uint8_t decipher_key[tls_exch->cipher_callbacks->key_size];
+	uint8_t decipher_iv[tls_exch->cipher_callbacks->iv_size];
+
+	status = compute_key_iv_pair(tls_exch->current_client_traffic_secret, cipher_key, tls_exch->cipher_callbacks->key_size,
+								 cipher_iv, tls_exch->cipher_callbacks->iv_size);
+	if(status != WEB_SUCCESS) {
+		dbg_err("Unable to compute client key/iv pair");
+		return status;
+	}
+
+	status = compute_key_iv_pair(tls_exch->current_server_traffic_secret, decipher_key, tls_exch->cipher_callbacks->key_size,
+								 decipher_iv, tls_exch->cipher_callbacks->iv_size);
+	if(status != WEB_SUCCESS) {
+		dbg_err("Unable to compute server key/iv pair");
+		return status;
+	}
+
+	tls_exch->cipher_data = tls_exch->cipher_callbacks->init(cipher_key, cipher_iv, decipher_key, decipher_iv);
+	return tls_exch->cipher_data == NULL ? WEB_ERROR_FAILED : WEB_SUCCESS;
 }
 
 web_status_t fetch_server_hello(tls_exchange_t *tls_exch, tls_handshake_t *server_hello, size_t length) {
@@ -357,11 +395,6 @@ web_status_t fetch_server_hello(tls_exchange_t *tls_exch, tls_handshake_t *serve
 	// TODO If HelloRetryRequest...
 
 	/* All necessary memory data */
-	uint8_t shared_secret[X25519_SECRET_SIZE];
-	uint8_t cipher_key[tls_exch->cipher_callbacks->key_size];
-	uint8_t cipher_iv[tls_exch->cipher_callbacks->iv_size];
-	uint8_t decipher_key[tls_exch->cipher_callbacks->key_size];
-	uint8_t decipher_iv[tls_exch->cipher_callbacks->iv_size];
 	tls_exch->current_server_traffic_secret = _malloc(CIPHER_SUITE_HASH_SIZE);
 	if(tls_exch->current_server_traffic_secret == NULL) {
 		return WEB_NOT_ENOUGH_MEM;
@@ -370,7 +403,7 @@ web_status_t fetch_server_hello(tls_exchange_t *tls_exch, tls_handshake_t *serve
 	if(tls_exch->current_client_traffic_secret == NULL) {
 		return WEB_NOT_ENOUGH_MEM;
 	}
-
+	uint8_t shared_secret[X25519_SECRET_SIZE];
 	x25519_scalarmult(shared_secret, server_public_key, tls_exch->client_private_key);
 	memset(tls_exch->client_private_key, 0, X25519_SECRET_SIZE);
 	_free(tls_exch->client_private_key);
@@ -379,28 +412,11 @@ web_status_t fetch_server_hello(tls_exchange_t *tls_exch, tls_handshake_t *serve
 	/* (De)cipher algo. initialization */
 	status = compute_handshake_secret(tls_exch->transcript, tls_exch->current_secret, shared_secret, X25519_SECRET_SIZE,
 									  tls_exch->current_client_traffic_secret, tls_exch->current_server_traffic_secret);
-	if(status != WEB_SUCCESS) {
-		dbg_err("Unable to compute handshake secret");
-		goto end_free;
+	if(status == WEB_SUCCESS) {
+		/* Computing handshake-specific secrets */
+		status = compute_cipher_data(tls_exch);
 	}
 
-	/* Computing handshake-specific secrets */
-	status = compute_key_iv_pair(tls_exch->current_client_traffic_secret, cipher_key, tls_exch->cipher_callbacks->key_size,
-								 cipher_iv, tls_exch->cipher_callbacks->iv_size);
-	if(status != WEB_SUCCESS) {
-		dbg_err("Unable to compute client key/iv pair");
-		goto end_free;
-	}
-	status = compute_key_iv_pair(tls_exch->current_server_traffic_secret, decipher_key, tls_exch->cipher_callbacks->key_size,
-								 decipher_iv, tls_exch->cipher_callbacks->iv_size);
-	if(status != WEB_SUCCESS) {
-		dbg_err("Unable to compute server key/iv pair");
-		goto end_free;
-	}
-	tls_exch->cipher_data = tls_exch->cipher_callbacks->init(cipher_key, cipher_iv, decipher_key, decipher_iv);
-	status = tls_exch->cipher_data == NULL ? WEB_ERROR_FAILED : WEB_SUCCESS;
-
-end_free:
 	/* Freeing critical data */
 	memset(shared_secret, 0, X25519_SECRET_SIZE);
 	return status;
@@ -413,9 +429,9 @@ web_status_t fetch_server_finished(tls_exchange_t *tls_exch, tls_finished_t *ser
 
 	/* Check server finished */
 	hkdf_ExpandLabel(tls_exch->current_server_traffic_secret, "finished", NULL, 0, finished_key, CIPHER_SUITE_HASH_SIZE);
-	compute_transcript_hash(tls_exch->transcript, TLS_HS_TYPE_FINISHED - 1, hash);
+	compute_transcript_hash(tls_exch->transcript, TLS_HS_SERVER_FINISHED - 1, hash);
 	hkdf_HMAC(finished_key, CIPHER_SUITE_HASH_SIZE, hash, CIPHER_SUITE_HASH_SIZE, finished_value);
-	if(length == CIPHER_SUITE_HASH_SIZE + 4 && memcmp(server_finished->data, finished_value, CIPHER_SUITE_HASH_SIZE)) {
+	if(length != CIPHER_SUITE_HASH_SIZE + 4 || memcmp(server_finished->data, finished_value, CIPHER_SUITE_HASH_SIZE) != 0) {
 		dbg_err("Incorrect server finished");
 		return WEB_ERROR_FAILED;
 	}
@@ -427,12 +443,16 @@ web_status_t fetch_server_finished(tls_exchange_t *tls_exch, tls_finished_t *ser
 	client_finished->hs_type = TLS_HS_TYPE_FINISHED;
 	client_finished->length = htonl24(CIPHER_SUITE_HASH_SIZE);
 	hkdf_ExpandLabel(tls_exch->current_client_traffic_secret, "finished", NULL, 0, finished_key, CIPHER_SUITE_HASH_SIZE);
-	compute_transcript_hash(tls_exch->transcript, TLS_HS_TYPE_FINISHED, hash);
+	compute_transcript_hash(tls_exch->transcript, TLS_HS_SERVER_FINISHED, hash);
 	hkdf_HMAC(finished_key, CIPHER_SUITE_HASH_SIZE, hash, CIPHER_SUITE_HASH_SIZE, client_finished->data);
 	web_DeliverTLSRecord(tls_exch, finished_buffer, length_finished_buffer, TLS_HANDSHAKE_TYPE);
-	_free_transcript(&tls_exch->transcript);
 
-	return WEB_SUCCESS;
+	/* Compute application traffic secrets */
+	tls_exch->cipher_callbacks->free(tls_exch->cipher_data);
+	compute_master_secret(tls_exch->transcript, tls_exch->current_secret, tls_exch->current_client_traffic_secret,
+						  tls_exch->current_server_traffic_secret, NULL, NULL);
+	_free_transcript(&tls_exch->transcript);
+	return compute_cipher_data(tls_exch);
 }
 
 web_status_t fetch_handshake_message(tls_exchange_t *tls_exch, tls_handshake_t *handshake_msg, size_t length) {
@@ -440,7 +460,7 @@ web_status_t fetch_handshake_message(tls_exchange_t *tls_exch, tls_handshake_t *
 	dbg_info("Received hs: %u", handshake_msg->hs_type);
 
 	if(tls_exch->tls_state < TLS_STATE_CONNECTED) {
-		add_transcript_message(&tls_exch->transcript, tls_exch->record);
+		add_transcript_message(&tls_exch->transcript, handshake_msg, length, TLS_SENDER_SERVER);
 	}
 
 	switch(tls_exch->tls_state) {
@@ -498,11 +518,11 @@ web_status_t fetch_handshake_message(tls_exchange_t *tls_exch, tls_handshake_t *
 			}
 			break;
 		case TLS_STATE_CONNECTED:
-			if(handshake_msg->hs_type != TLS_HS_TYPE_NEW_SESSION_TICKET) {
+			if(handshake_msg->hs_type == TLS_HS_TYPE_NEW_SESSION_TICKET) {
 				
-			} else if(handshake_msg->hs_type != TLS_HS_TYPE_CERTIFICATE_REQUEST) {
+			} else if(handshake_msg->hs_type == TLS_HS_TYPE_CERTIFICATE_REQUEST) {
 				status = WEB_NOT_SUPPORTED;
-			} else if(handshake_msg->hs_type != TLS_HS_TYPE_KEY_UPDATE) {
+			} else if(handshake_msg->hs_type == TLS_HS_TYPE_KEY_UPDATE) {
 
 			} else {
 				status = WEB_ERROR_FAILED;
@@ -567,15 +587,20 @@ web_status_t fetch_tls_encrypted_record(tls_exchange_t *tls_exch, tls_record_t *
 	status = tls_exch->cipher_callbacks->decipher(payload, payload, payload_length, record, sizeof(tls_record_t),
 												  tls_exch->cipher_data);
 	if(status == WEB_SUCCESS) {
-		
 		size_t decipher_length = payload_length - tls_exch->cipher_callbacks->extra_size;
 		/* Removing padding */
 		const uint8_t *padded_payload = payload + decipher_length - 1;
 		while(*padded_payload == 0x00) {
-			padded_payload++;
+			padded_payload--;
+			if(padded_payload <= payload) {
+				dbg_err("Invalid padding");
+				return WEB_ERROR_FAILED;
+			}
 		}
 		decipher_length = padded_payload - payload;
 		status = fetch_tls_record(tls_exch, payload, decipher_length, *padded_payload /* Content type */);
+	} else {
+		dbg_err("Unable to decrypt!");
 	}
 
 	return status;
@@ -584,16 +609,14 @@ web_status_t fetch_tls_encrypted_record(tls_exchange_t *tls_exch, tls_record_t *
 web_status_t fetch_tls_part(web_port_t port, link_msg_type_t msg_type, void *data, size_t length,
 						    web_callback_data_t *user_data) {
 	(void)port; (void)user_data;
-
-	if(msg_type == LINK_MSG_TYPE_RST) {
-		dbg_err("RST received");
-		return WEB_ERROR_FAILED;
-	} else if(msg_type == LINK_MSG_TYPE_FIN) {
-		dbg_err("FIN received");
-		return WEB_SUCCESS;
-	}
 	
 	tls_exchange_t *tls_exch = (tls_exchange_t *)user_data;
+	if(msg_type == LINK_MSG_TYPE_RST) {
+		return tls_exch->appli_callback(tls_exch->tcp_exch->port_src, LINK_MSG_TYPE_RST, NULL, 0, tls_exch->appli_data);
+	} else if(msg_type == LINK_MSG_TYPE_FIN) {
+		return tls_exch->appli_callback(tls_exch->tcp_exch->port_src, LINK_MSG_TYPE_FIN, NULL, 0, tls_exch->appli_data);
+	}
+
 	if(tls_exch->received_length < sizeof(tls_record_t)) {
 		/* The exchange has just started */
 		if(length + tls_exch->received_length >= sizeof(tls_record_t)) {
@@ -619,11 +642,13 @@ web_status_t fetch_tls_part(web_port_t port, link_msg_type_t msg_type, void *dat
 
 	/* Checking whether the record has yet been fully downloaded or not */
 	if(tls_exch->received_length >= sizeof(tls_record_t)) {
-		if(tls_exch->received_length >= ntohs(tls_exch->record->length) + sizeof(tls_record_t)) {
+		const size_t record_size = ntohs(tls_exch->record->length) + sizeof(tls_record_t);
+		if(tls_exch->received_length == record_size) {
 			if(tls_exch->tls_state >= TLS_STATE_WAIT_ENCRYPTED_EXTENSIONS) {  /* If encrypted */
 				fetch_tls_encrypted_record(tls_exch, tls_exch->record, tls_exch->received_length);
 			} else {
-				fetch_tls_record(tls_exch, tls_exch->record->data, tls_exch->received_length, tls_exch->record->opaque_type);
+				fetch_tls_record(tls_exch, tls_exch->record->data, tls_exch->received_length - sizeof(tls_record_t),
+								 tls_exch->record->opaque_type);
 			}
 
 			_free(tls_exch->record);
@@ -638,12 +663,13 @@ web_status_t fetch_tls_part(web_port_t port, link_msg_type_t msg_type, void *dat
 		}
 	}
 
+	web_status_t status = WEB_SUCCESS;
 	const size_t remaining_data = length - to_copy;
 	if(remaining_data > 0) {
-		fetch_tls_part(port, msg_type, data + to_copy, remaining_data, user_data);
+		status = fetch_tls_part(port, msg_type, data + to_copy, remaining_data, user_data);
 	}
 	
-	return WEB_SUCCESS;
+	return status;
 }
 
 void _free_tls_connection(tls_exchange_t *tls_exch) {
