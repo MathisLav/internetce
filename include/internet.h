@@ -47,6 +47,11 @@ typedef enum web_status {
 	WEB_DNS_ERROR,									/**< An error occurred in the DNS reply.	*/
 	WEB_NOT_SUPPORTED,								/**< Not yet supported */
 	WEB_ERROR_FAILED,								/**< General error (a packet couldn't be sent, etc) */
+	WEB_CONNECTION_TERMINATION_ERROR,				/**< Eg. an RST segment has been received */
+	WEB_NOT_ENOUGH_ENTROPY,							/**< Not enought entropy */
+	WEB_INVALID_ARGUMENTS,							/**< When a method has been given invalid arguments */
+	WEB_SHA256_NOT_INITIALIZED,
+	WEB_SHA256_IN_USE,
 	HTTP_STATUS_OK = 200,
 	HTTP_STATUS_MOVED_PERMANENTLY = 301,
 	HTTP_STATUS_NOT_MODIFIED = 304,
@@ -62,6 +67,11 @@ typedef enum web_status {
 	HTTP_STATUS_BAD_GATEWAY = 502,
 	HTTP_STATUS_SERVICE_UNAVAILABLE = 503
 } web_status_t;
+
+typedef enum scheduler_status {
+	SCHEDULER_AGAIN,
+	SCHEDULER_DESTROY,
+} scheduler_status_t;
 
 /**
  * DHCP communication states.
@@ -79,6 +89,7 @@ typedef enum dhcp_state {
  */
 typedef enum tcp_state {
 	TCP_STATE_LISTEN,
+	TCP_STATE_SYN_RCVD,
 	TCP_STATE_SYN_SENT,
 	TCP_STATE_ESTABLISHED,
 	TCP_STATE_FIN_WAIT_1,
@@ -89,6 +100,91 @@ typedef enum tcp_state {
 	TCP_STATE_TIME_WAIT,
 	TCP_STATE_CLOSED
 } tcp_state_t;
+
+/**
+ * State of the connection, sent to the application layer callback.
+ * 	- LINK_MSG_TYPE_DATA: Data received, data and length are non-null
+ * 	- LINK_MSG_TYPE_RST: The connection has been reset, data and length are invalid
+ * 	- LINK_MSG_TYPE_FIN: The connection has been closed by the other side, data and length are invalid
+ * When LINK_MSG_TYPE_RST and LINK_MSG_TYPE_FIN are received, the callback will never be called again.
+ * The user must then call the close method of the underlying layer (web_TCPClose, web_TLSClose, etc) to free the resources
+ * 	(even in the LINK_MSG_TYPE_RST case).
+ */
+typedef enum link_msg_type {
+	LINK_MSG_TYPE_DATA,
+	LINK_MSG_TYPE_RST,
+	LINK_MSG_TYPE_FIN
+} link_msg_type_t;
+
+/**
+ * TLS enums
+ */
+
+typedef enum tls_content_type {
+	TLS_INVALID_TYPE		= 0,
+	TLS_CHANGE_CIPHER_SPEC	= 20,
+	TLS_ALERT_TYPE			= 21,
+	TLS_HANDSHAKE_TYPE		= 22,
+	TLS_APPLI_DATA_TYPE		= 23
+} tls_content_type_t;
+
+typedef enum tls_state {
+	TLS_STATE_WAIT_SERVER_HELLO,
+	TLS_STATE_WAIT_ENCRYPTED_EXTENSIONS,
+	TLS_STATE_WAIT_CERT_CR,  		/**< either wait for a certificate or a certificate request (but does not supporting cert_req for now) */
+	TLS_STATE_WAIT_CERTIFICATE,  	/**< N/A as not supporting cert_req */
+	TLS_STATE_WAIT_CERTIFICATE_VERIFY,
+	TLS_STATE_WAIT_FINISHED,
+	TLS_STATE_CONNECTED,
+	TLS_STATE_CLOSE_NOTIFY_SENT,
+	TLS_STATE_CLOSE_NOTIFY_RECEIVED,
+	TLS_STATE_CLOSED,
+} tls_state_t;
+
+typedef enum tls_hs_msg_type {
+	TLS_HS_TYPE_CLIENT_HELLO			= 1,
+	TLS_HS_TYPE_SERVER_HELLO			= 2,
+	TLS_HS_TYPE_NEW_SESSION_TICKET		= 4,
+	TLS_HS_TYPE_END_OF_EARLY_DATA		= 5,
+	TLS_HS_TYPE_ENCRYPTED_EXTENSIONS	= 8,
+	TLS_HS_TYPE_CERTIFICATE				= 11,
+	TLS_HS_TYPE_CERTIFICATE_REQUEST		= 13,
+	TLS_HS_TYPE_CERTIFICATE_VERIFY		= 15,
+	TLS_HS_TYPE_FINISHED				= 20,
+	TLS_HS_TYPE_KEY_UPDATE				= 24,
+	TLS_HS_TYPE_MESSAGE_HASH			= 254
+} tls_hs_msg_type_t;
+
+typedef enum tls_sender {
+	TLS_SENDER_SERVER					= 0 << 7,
+	TLS_SENDER_CLIENT					= 1 << 7,
+} tls_sender_t;
+
+#define TO_HS_SENDER_TYPE(msg, sender) ((msg << 1) | sender)
+
+/**
+ * List only the messages that can be in the transcript hash (ie that can be received during the TLS handshake)
+ * Note: Because TLS chose not to be logical, messages are not in ascendant order (cert. request > server cert. verify)
+ * 		 But this is 'ok' because the transcript hash is not computed around those edge cases
+ */
+typedef enum tls_hs_sender_msg_type {
+	TLS_HS_CLIENT_CLIENT_HELLO			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CLIENT_HELLO, 			0),
+	TLS_HS_SERVER_SERVER_HELLO			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_SERVER_HELLO, 			0),
+	TLS_HS_SERVER_ENCRYPTED_EXTENSIONS	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_ENCRYPTED_EXTENSIONS, 	TLS_SENDER_SERVER),
+	TLS_HS_SERVER_CERTIFICATE_REQUEST	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_REQUEST, 	TLS_SENDER_SERVER),
+	TLS_HS_SERVER_CERTIFICATE			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE, 			TLS_SENDER_SERVER),
+	TLS_HS_SERVER_CERTIFICATE_VERIFY	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_VERIFY, 	TLS_SENDER_SERVER),
+	TLS_HS_SERVER_FINISHED				= TO_HS_SENDER_TYPE(TLS_HS_TYPE_FINISHED, 				TLS_SENDER_SERVER),
+	TLS_HS_CLIENT_END_OF_EARLY_DATA		= TO_HS_SENDER_TYPE(TLS_HS_TYPE_END_OF_EARLY_DATA, 		TLS_SENDER_CLIENT),
+	TLS_HS_CLIENT_CERTIFICATE			= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE, 			TLS_SENDER_CLIENT),
+	TLS_HS_CLIENT_CERTIFICATE_VERIFY	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_VERIFY, 	TLS_SENDER_CLIENT),
+	TLS_HS_CLIENT_FINISHED				= TO_HS_SENDER_TYPE(TLS_HS_TYPE_FINISHED, 				TLS_SENDER_CLIENT),
+} tls_hs_sender_msg_type_t;
+
+typedef enum key_update_request_type {
+	TLS_KEY_UPDATE_NOT_REQUESTED = 0,
+	TLS_KEY_UPDATE_REQUESTED = 1,
+} key_update_request_type_t;
 
 
 /**
@@ -128,6 +224,12 @@ typedef web_status_t (web_port_callback_t)(web_port_t port, uint8_t protocol, vo
 										   web_callback_data_t *user_data);
 
 /**
+ * The callback used to notice a port that a TCP segment has been received.
+ */
+typedef web_status_t (web_appli_callback_t)(web_port_t port, link_msg_type_t msg_type, void *data, size_t length,
+										  web_callback_data_t *user_data);
+
+/**
  * The callback used to notice the user a DNS reply has been received.
  * If res_ip == 0xffffffff, then the request failed.
  */
@@ -136,12 +238,35 @@ typedef web_status_t (web_dns_callback_t)(web_port_t port, uint32_t res_ip, web_
 /**
  * The callback called for a schedule event
  */
-typedef web_status_t (web_schedule_callback_t)(web_callback_data_t *user_data);
+typedef scheduler_status_t (web_schedule_callback_t)(web_callback_data_t *user_data);
 
 /**
  * The callback used to inform the user that the object (event, ...) will be destroyed
  */
 typedef void (web_destructor_callback_t)(web_callback_data_t *user_data);
+
+/**
+ * Callback called by the TLS implementation when it needs to initialize the ciphering module
+ */
+typedef web_callback_data_t *(web_cipher_init_callback_t)(uint8_t cipher_key[], uint8_t cipher_iv[],
+														  uint8_t decipher_key[], uint8_t decipher_iv[]);
+
+/**
+ * Callback called by the TLS implementation when it needs to free the ciphering module data
+ */
+typedef void (web_cipher_free_callback_t)(web_callback_data_t *user_data);
+
+/**
+ * Callback called by the TLS implementation when it needs to cipher data
+ */
+typedef web_status_t (web_cipher_cipher_callback_t)(void *dest, void *source, size_t length, void *aad, size_t aad_length,
+													web_callback_data_t *user_data);
+
+/**
+ * Callback called by the TLS implementation when it needs to decipher data
+ */
+typedef web_status_t (web_cipher_decipher_callback_t)(void *dest, void *source, size_t length, void *aad, size_t aad_length,
+													  web_callback_data_t *user_data);
 
 
 /**
@@ -242,7 +367,7 @@ typedef struct rndis_packet_msg {
 	uint32_t PerPacketInfoLength;
 	uint32_t VcHandle;			/**< Must be 0										*/
 	uint32_t Reserved;			/**< Must be 0										*/
-	uint8_t data[0];
+	uint8_t data[];
 } rndis_packet_msg_t;
 
 
@@ -341,6 +466,82 @@ typedef struct tcp_segment {
 	uint8_t options[];
 } tcp_segment_t;
 
+typedef struct tls_record {
+	uint8_t opaque_type;
+	uint16_t legacy_version;
+	uint16_t length;
+	uint8_t data[];
+} tls_record_t;
+
+typedef struct tls_extension {
+	uint16_t extension_id;
+	uint16_t extension_length;
+	uint8_t data[];
+} tls_extension_t;
+
+typedef struct tls_handshake {
+	uint8_t hs_type;
+	uint24_t length;
+} tls_handshake_t;
+
+typedef struct tls_hello {
+	tls_handshake_t header;
+	uint16_t version;
+	uint8_t random[32];
+	uint8_t zero;			/**< Session ID not used in TLS 1.3						*/
+	// uint8_t cipher_suites[];
+	// uint8_t compression_methods_size;
+	// uint8_t zero			/**< no compression methods in TLS 1.3					*/
+	// uint8_t extensions[];
+} tls_hello_t;
+
+typedef struct tls_finished {
+	tls_handshake_t header;
+	uint8_t hash[];
+} tls_finished_t;
+
+typedef struct tls_alert_record {
+	uint8_t alert_level;
+	uint8_t alert_description;
+} tls_alert_record_t;
+
+typedef struct tls_key_update {
+	tls_handshake_t header;
+	uint8_t key_update_request;
+} tls_key_update_t;
+
+typedef struct tls_encrypted_extensions {
+	tls_handshake_t header;
+	uint16_t extensions_size;
+	uint8_t extensions[];
+} tls_encrypted_extensions_t;
+
+
+
+typedef struct tls_cert_request {
+	tls_handshake_t header;
+	uint8_t context_size;
+	uint8_t context[];
+	// uint16_t extensions_size;
+	// uint8_t extensions[];
+} tls_cert_request_t;
+
+typedef struct tls_session_ticket {
+	uint32_t lifetime;
+	uint32_t age_add;
+	uint8_t nonce_length;
+	uint8_t nonce[];
+	// uint16_t ticket_length;
+	// uint8_t ticket[];
+	// uint16_t extensions_length;
+	// uint8_t extensions[];
+} tls_session_ticket_t;
+
+typedef struct tls_new_session_ticket {
+	tls_handshake_t header;
+	tls_session_ticket_t ticket;
+} tls_new_session_ticket_t;
+
 typedef struct network_pseudo_hdr {
     uint32_t ip_src;
     uint32_t ip_dst;
@@ -358,6 +559,7 @@ typedef struct network_pseudo_hdr {
 typedef struct tcp_segment_list {
 	uint32_t relative_sn;
 	size_t pl_length;		/**< Length of the payload of the segment				*/
+	uint16_t flags;			/**< Flags of the segment								*/
 	void *payload;			/**< The payload										*/
 	struct tcp_segment_list *next;
 } tcp_segment_list_t;
@@ -371,6 +573,7 @@ typedef struct msg_queue {
 
 typedef struct pushed_seg_list {
 	uint32_t next_rsn;					/**< Sequence number of the last byte of the segment+1	*/
+	uint16_t flags;						/**< Flags of the segment								*/
 	msg_queue_t *seg;
 	struct pushed_seg_list *next;
 } pushed_seg_list_t;
@@ -393,15 +596,49 @@ typedef struct tcp_exchange {
 	uint32_t cur_ackn;					/**< Current server's sequence number (our ack number)				*/
 	tcp_segment_list_t *in_segments;	/**< Received data that has not been sent to the application yet	*/
 	pushed_seg_list_t *out_segments;	/**< The segments pushed on the send queue that are waiting for an ack */
-	bool dirty;							/**< Connection to delete as soon as possible						*/
-	web_port_callback_t *callback;		/**< Callback when a packet is addressed to port_src				*/
+	web_appli_callback_t *callback;		/**< Callback when a packet is addressed to port_src				*/
 	web_callback_data_t *user_data;		/**< In our case, an http_exchange_t structure						*/
+	size_t send_mss;					/**< Maximum Segment Size for the distant host						*/
 } tcp_exchange_t;
 
 typedef struct tcp_exchange_list {
 	tcp_exchange_t tcp_exch;
 	struct tcp_exchange_list *next;
 } tcp_exchange_list_t;
+
+typedef struct linked_transcript_msg {
+	size_t length;
+	tls_hs_sender_msg_type_t msg_type;
+    void *data;
+    struct linked_transcript_msg *next;
+} linked_transcript_msg_t;
+
+typedef struct cipher_callbacks {
+	web_cipher_init_callback_t *init;
+	web_cipher_free_callback_t *free;
+	web_cipher_cipher_callback_t *cipher;
+	web_cipher_decipher_callback_t *decipher;
+	uint8_t extra_size;					/**< Size added to the plaintext to make the ciphertext (AEAD, etc)	*/
+	uint8_t key_size;
+	uint8_t iv_size;
+} cipher_callbacks_t;
+
+typedef struct tls_exchange {
+	tls_state_t tls_state;
+	size_t received_length;
+	tls_record_t *record;				/**< Where to put the result: must be record_length long			*/
+	tcp_exchange_t *tcp_exch;
+	linked_transcript_msg_t *transcript;/**< Used by the key_schedule module								*/
+	uint8_t *current_secret;			/**< The current derived secret from the key schedule				*/
+	uint8_t *client_private_key;		/**< The private key of the client									*/
+	uint8_t *current_server_traffic_secret;	/**< The current server traffic secret							*/
+	uint8_t *current_client_traffic_secret;	/**< The current client traffic secret							*/
+	uint8_t *res_master_secret;			/**< The resumption master secret derived from the key schedule		*/	
+	cipher_callbacks_t *cipher_callbacks;
+	web_callback_data_t *cipher_data;
+	web_appli_callback_t *appli_callback;	/**< Callback when a packet is addressed to this connection		*/
+	web_callback_data_t *appli_data;	/**< The opaque data provided to web_TLSConnect						*/
+} tls_exchange_t;
 
 
 /**
@@ -457,6 +694,7 @@ typedef struct tcp_exchange_list {
 #define HTTPS_PORT			443
 
 #define MAX_SEGMENT_SIZE	1460
+#define DEFAULT_MSS			536			/**< Default Maximum Segment Size									*/
 #define TCP_WINDOW_SIZE		MAX_SEGMENT_SIZE * 5  /**< Considering the calculator is pretty slow			*/
 
 #define ETH_HEADERS_SIZE	(sizeof(rndis_packet_msg_t) + (sizeof(eth_frame_t) + 4))
@@ -464,6 +702,7 @@ typedef struct tcp_exchange_list {
 #define ICMP_HEADERS_SIZE	(IPV4_HEADERS_SIZE + sizeof(icmpv4_echo_t))
 #define TCP_HEADERS_SIZE	(IPV4_HEADERS_SIZE + sizeof(tcp_segment_t))
 #define UDP_HEADERS_SIZE	(IPV4_HEADERS_SIZE + sizeof(udp_datagram_t))
+#define TLS_HEADERS_SIZE	(TCP_HEADERS_SIZE + sizeof(tls_record_t))
 #define MIN_ETH_HDR_SIZE	64
 
 #define FLAG_TCP_NONE		0
@@ -494,7 +733,7 @@ void web_Init();
 void web_Cleanup();
 
 /**
- *	@brief	Performs a HTTP GET request to \c url and stores the address of the data in
+ *	@brief	Performs an HTTP GET request to \c url and stores the address of the data in
  *	\c *data. Waits until the transfer finishes.
  *	@param	url	The target URL.
  *	@param	data This function will update *data to be the address where the downloaded data is.
@@ -507,8 +746,24 @@ void web_Cleanup();
 web_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_header);
 
 /**
- *	@brief	Performs a HTTP POST request to \c url and stores the address of the data in \c *data.
- 			Waits until the transfer finishes.
+ *	@brief	Performs an HTTPS (secured HTTP) GET request to \c url and stores the address
+ *	of the data in \c *data. Waits until the transfer finishes.
+ *	@param	url	The target URL.
+ *	@param	data This function will update *data to be the address where the downloaded data is.
+ *	@param	keep_http_header If true, *data begins with the HTTP header.
+ *	@returns The HTTP status code of the request or an error. See \c web_status_t
+ *			 for more information.
+ *	@warning The content returned by this function in data is in READ-ONLY !
+ *			 Please use \c unlock_data() to write on \c data.
+ *	@note	 This is the secured version of web_HTTPGet, using TLS.
+ *			 Be aware that it will take much more time than web_HTTPGet.
+ *	@warning THIS IS NOT A "PROFESSIONAL" IMPLEMENTATION OF TLS. DO NOT SEND SENSITIVE DATA THROUGH IT!
+ */
+web_status_t web_HTTPSGet(const char* url, http_data_t **data, bool keep_http_header);
+
+/**
+ *	@brief	Performs an HTTP POST request to \c url and stores the address of the data in \c *data.
+ *			Waits until the transfer finishes.
  *	@param	url	The target URL.
  *	@param	data When successful, \c *data is the address of the received HTTP content.
  *	@param	keep_http_header If true, *data begins with the HTTP header.
@@ -520,6 +775,24 @@ web_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_hea
  *			 Please use \c unlock_data() to write on \c data.
  */
 web_status_t web_HTTPPost(const char* url, http_data_t **data, bool keep_http_header, int nb_params, ...);
+
+/**
+ *	@brief	Performs an HTTPS (secured HTTP) POST request to \c url and stores the address
+ *			of the data in \c *data. Waits until the transfer finishes.
+ *	@param	url	The target URL.
+ *	@param	data When successful, \c *data is the address of the received HTTP content.
+ *	@param	keep_http_header If true, *data begins with the HTTP header.
+ *	@param	nb_params Number of additionnal parameters of the POST request.
+ *	@params ... Additionnal parameters. Must be of const char* type.
+ *	@example HTTPPost("www.google.com", &data, true, 2, "Age", "21", "Name", "Epharius");
+ *	@returns The HTTP status code of the request or an error. See \c web_status_t for more information.
+ *	@warning The content returned by this function in data is in READ-ONLY !
+ *			 Please use \c unlock_data() to write on \c data.
+ *	@note	 This is the secured version of web_HTTPPost, using TLS.
+ *			 Be aware that it will take much more time than web_HTTPPost.
+ *	@warning THIS IS NOT A "PROFESSIONAL" IMPLEMENTATION OF TLS. DO NOT SEND SENSITIVE DATA THROUGH IT!
+ */
+web_status_t web_HTTPSPost(const char* url, http_data_t **data, bool keep_http_header, int nb_params, ...);
 
 /**
  *	@brief	Unlocks the data so it can be modified.
@@ -537,6 +810,35 @@ int web_UnlockData(http_data_t **http_data);
  *	@returns 1 if the data is now locked, 0 if not.
  */
 int web_LockData(http_data_t **http_data);
+
+/**
+ * @brief	Initiates the connection to the given TLS server.
+ * @note	This function blocks until the TLS handshake is completed.
+ * @note	You must call \c web_TCPClose to close the connection.
+ * @param	ip_dst The IP address of the TLS server.
+ * @param	port_dst The port of the TLS server.
+ * @param	server_name The name of the server (SNI).
+ * @returns A \c tls_exchange_t structure or \c NULL. You'll have to pass this structure to other TLS functions.
+ */
+tls_exchange_t *web_TLSConnect(uint32_t ip_dst, web_port_t port_dst, const char *server_name, web_appli_callback_t *callback,
+							   web_callback_data_t *user_data);
+
+/**
+ * @brief	Close a TLS connection.
+ * @note	The \c tls_exchange_t structure can't be used after calling this function.
+ * @param	tls_exch The \c tls_exchange_t structure returned by \c web_TLSConnect.
+ * @param	is_abort If true, the connection will be aborted and the server will be sent an error.
+ */
+void web_TLSClose(tls_exchange_t *tls_exch, bool is_abort);
+
+/**
+ *  @brief	Deliver a TLS data to the host connected to \c tls_exch.
+ * 	@param	tls_exch The TLS exchange structure, returned by \c web_TLSConnect.
+ * 	@param	data The data that must be delivered.
+ * 	@param	length The length of the data.
+ * 	@returns  \c WEB_SUCCESS or an error.
+ */
+web_status_t web_DeliverTLSData(tls_exchange_t *tls_exch, void *data, size_t length);
 
 /**
  *	@brief	Sends a DNS request to the router's default DNS Server. Waits until the request finishes.
@@ -566,15 +868,18 @@ web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, w
  * @returns A \c tcp_exchange_t structure or \c NULL. You'll have to pass this structure to other TCP functions such as
  * 			\c web_DeliverTCPSegment.
  */
-tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_port_callback_t *callback,
+tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_appli_callback_t *callback,
 							   web_callback_data_t *user_data);
 
 /**
  * @brief  Close a TCP connection.
  * @note   The \c tcp_exchange_t structure can't be used after calling this function.
  * @param  tcp_exch The \c tcp_exchange_t structure returned by \c web_TCPConnect.
+ * @param  is_abort If true, the connection will be aborted (with an RST segment).
+ * @returns \c WEB_SUCCESS or an error (no memory, etc).
+ * @warning The \c tcp_exchange_t structure must NOT be used after calling this function.
  */
-void web_TCPClose(tcp_exchange_t *tcp_exch);
+web_status_t web_TCPClose(tcp_exchange_t *tcp_exch, bool is_abort);
 
 /**
  *  @brief	Deliver a TCP segment to the host connected to \c tcp_exch.
@@ -582,13 +887,9 @@ void web_TCPClose(tcp_exchange_t *tcp_exch);
  * 	@param	tcp_exch The TCP exchange structure, returned by web_TCPConnect.
  * 	@param	data The data that must be delivered.
  * 	@param	length The length of the data.
- * 	@param	flags The TCP flags to send. If equals to 0 or \c FLAG_TCP_NONE, this will be set to \c FLAG_TCP_ACK.
- * 	@param	opt_size The size of the TCP options to send (if any).
- * 	@param	options The TCP options to send (or NULL).
  * 	@returns  \c WEB_SUCCESS or an error.
  */
-web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, char *data, size_t length, uint16_t flags, size_t opt_size,
-				  				   const uint8_t *options);
+web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length);
 
 /**
  *	@brief	Schedules the delivery of a TCP segment.
@@ -765,14 +1066,19 @@ web_port_t web_RequestPort();
  *	@param	port The port to listen.
  *	@param	callback Function that will be called if any message addressed to this port is received. Can't be \c NULL.
  *	@param	user_data Pointer passed to your callback.
+ *	@returns \c WEB_SUCCESS or an error.
+ *	@note Given the RNDIS restrictions (which is just a LAN behind NAT/PAT rules), you can't passively listen to a port.
+ *		  It means that it is not possible to create a webserver or any application that use passive listens
+ *		  (but it may be possible in the future if the library supports other physical layers such as Wi-Fi, ECM, etc).
  */
-void web_ListenPort(web_port_t port, web_port_callback_t *callback, web_callback_data_t *user_data);
+web_status_t web_ListenPort(web_port_t port, web_port_callback_t *callback, web_callback_data_t *user_data);
 
 /**
  *	@brief	Unbinds any function linked with a given port.  
  *	@param	port The port to "forget".
+ *	@returns \c WEB_SUCCESS or an error.
  */
-void web_UnlistenPort(web_port_t port);
+web_status_t web_UnlistenPort(web_port_t port);
 
 /**
  *	@brief	Pushes a message on the sending queue. The message will be re-sent every \c SEND_EVERY seconds
@@ -781,7 +1087,7 @@ void web_UnlistenPort(web_port_t port);
  *	@param	msg The data that must be sent.
  *	@param	length The length of the message.
  *	@returns A structure that must be passed to \c web_popMessage() once a response has been received.
- *	@note This function may not be useful for most users. You may want to use \c web_PushTCPSegment or
+ *	@note This function may not be useful for most users. You may want to use \c web_PushRawTCPSegment or
  *		  \c web_PushUDPDatagram instead.
  */
 msg_queue_t *web_PushMessage(void *msg, size_t length);

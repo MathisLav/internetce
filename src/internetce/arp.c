@@ -3,6 +3,7 @@
 
 #include "include/arp.h"
 #include "include/core.h"
+#include "include/debug.h"
 
 
 /**********************************************************************************************************************\
@@ -38,6 +39,12 @@ void fetch_arp_msg(eth_frame_t *ethernet_frame) {
 	   arp_msg->ProtocolType != ETH_IPV4 || arp_msg->IP_dst != netinfo.IP_addr) {
 		return;
 	}
+
+	dbg_info("Who has %d.%d.%d.%d? Tell %d.%d.%d.%d",
+			 (uint8_t)(arp_msg->IP_dst >> 0)  & 0xFF, (uint8_t)(arp_msg->IP_dst >> 8) & 0xFF,
+			 (uint8_t)(arp_msg->IP_dst >> 16) & 0xFF, (uint8_t)(arp_msg->IP_dst >> 24) & 0xFF,
+			 (uint8_t)(arp_msg->IP_src >> 0)  & 0xFF, (uint8_t)(arp_msg->IP_src >> 8) & 0xFF,
+			 (uint8_t)(arp_msg->IP_src >> 16) & 0xFF, (uint8_t)(arp_msg->IP_src >> 24) & 0xFF);
 
 	arp_message_t resp;
 	resp.HwType = 0x0100;

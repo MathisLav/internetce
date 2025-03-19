@@ -48,7 +48,7 @@
  * Internal functions prototype
  */
 
-void dhcp_init();
+int dhcp_init();
 
 web_status_t fetch_dhcp_msg(web_port_t port, uint8_t protocol, void *msg, size_t length,
                             web_callback_data_t *user_data);

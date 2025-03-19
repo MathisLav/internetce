@@ -1,11 +1,13 @@
 #include <internet.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "include/usb.h"
 #include "include/core.h"
 #include "include/rndis.h"
 #include "include/debug.h"
+#include "include/crypto.h"
 #include "include/ethernet.h"
 
 
@@ -24,7 +26,7 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 				netinfo.state = STATE_USB_ENABLED;
 			} else {
 				usb_DisableDevice(netinfo.device);
-				netinfo.state = STATE_UNKNOWN;
+				netinfo.state = STATE_USB_INITIALIZED;
 			}
 			break;
 		case USB_DEVICE_DISABLED_EVENT:
@@ -36,7 +38,17 @@ usb_error_t usbHandler(usb_event_t event, void *event_data, usb_callback_data_t 
 		default:
 			break;
 	}
-	monitor_usb_connection(event);
+
+	/**
+	 * Feeding the Random Number Generator module with the current timer value.
+	 * Only doing this at the beggining, when we need fast (but not perfect) entropy.
+	 * Then, better entropy is given by the timing the lib receives USB packets.
+	 */
+	if(!rng_IsAvailable()) {
+		rng_FeedFromEvent();
+	}
+
+	monitor_usb_connection(event, netinfo.state);
 
 	return USB_SUCCESS;
 }
@@ -101,6 +113,10 @@ web_status_t configure_usb_device() {
 					netinfo.ep_wc_in = endpoint_desc->bEndpointAddress;
 				} else if(is_cdc_int && (endpoint_desc->bEndpointAddress & 0x80) != 0) {  /* IN endpoint */
 					netinfo.ep_cdc_in = endpoint_desc->bEndpointAddress;
+					/* The USB input buffer must be a multiple of the max packet size (see usbdrvce.h)
+					 * Considering this number is a power of 2 */
+					netinfo.in_buffer_size = ((MAX_RNDIS_TRANSFER_SIZE + endpoint_desc->wMaxPacketSize) &
+											  ~(endpoint_desc->wMaxPacketSize - 1));
 				} else if(is_cdc_int && (endpoint_desc->bEndpointAddress & 0x80) == 0) {  /* OUT endpoint */
 					netinfo.ep_cdc_out = endpoint_desc->bEndpointAddress;
 				}
@@ -116,7 +132,7 @@ web_status_t configure_usb_device() {
 
 	/* If one is missing, ignoring the device */
 	if(netinfo.ep_wc_in == 0 || netinfo.ep_cdc_in == 0 || netinfo.ep_cdc_out == 0) {
-		netinfo.state = STATE_UNKNOWN;
+		netinfo.state = STATE_USB_INITIALIZED;
 		netinfo.ep_wc_in = 0;
 		netinfo.ep_cdc_in = 0;
 		netinfo.ep_cdc_out = 0;
@@ -140,28 +156,59 @@ usb_error_t packets_callback(usb_endpoint_t endpoint, usb_transfer_status_t stat
 	void *packet = *(void **)data;
 	*(void **)data = NULL;
 
+	/* Seeding Random Number Generation module */
+	rng_FeedFromEvent();
+
 	if(status & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (pckt)");
 		netinfo.state = STATE_USB_LOST;
-		free(packet);
+		_free(packet);
 		return USB_ERROR_FAILED;
 	} else if(status != USB_SUCCESS) {
 		dbg_warn("Packet callback returned %u", status);
-		free(packet);
+		netinfo.state = STATE_USB_LOST;
+		_free(packet);
 		return USB_SUCCESS;
 	}
 
 	/* Several messages can be queued in the same transfer */
-	void *cur_packet = packet;
-	while(cur_packet < packet + transferred) {
-		eth_frame_t *frame = (eth_frame_t *)(cur_packet + sizeof(rndis_packet_msg_t));
-		web_status_t ret_status = fetch_ethernet_frame(frame, ((rndis_packet_msg_t *)cur_packet)->DataLength);
-		if(ret_status != WEB_SUCCESS) {
-			return USB_ERROR_FAILED;
+	size_t handled_length = 0;
+
+	/* The beggining of the RNDIS packet was received in the previous USB frame */
+	if(netinfo.temp_usb_buffer != NULL) {
+		rndis_packet_msg_t *const rndis_packet = (rndis_packet_msg_t *)netinfo.temp_usb_buffer;
+		const size_t remaining = rndis_packet->MessageLength - netinfo.received_size;
+
+		/* If this it still not the end of the packet... */
+		if(remaining > transferred) {
+			memcpy(netinfo.temp_usb_buffer + netinfo.received_size, packet, transferred);
+			netinfo.received_size += transferred;
+			return USB_SUCCESS;
+		} else {
+			memcpy(netinfo.temp_usb_buffer + netinfo.received_size, packet, remaining);
+			eth_frame_t *frame = (eth_frame_t *)rndis_packet->data;
+			fetch_ethernet_frame(frame, rndis_packet->DataLength);
+			handled_length += rndis_packet->MessageLength;
+			_free(netinfo.temp_usb_buffer);
+			netinfo.temp_usb_buffer = NULL;
 		}
-		cur_packet = cur_packet + sizeof(rndis_packet_msg_t) + ((rndis_packet_msg_t *)cur_packet)->DataLength;
 	}
 
-	free(packet);
+	while(handled_length < transferred) {
+		rndis_packet_msg_t *const cur_packet = packet + handled_length;
+		/* If the RNDIS data has been splitted between 2 USB packets: not cool */
+		if(transferred - handled_length < cur_packet->MessageLength) {
+			netinfo.temp_usb_buffer = _malloc(cur_packet->MessageLength, "tmpusb");
+			netinfo.received_size = transferred - handled_length;
+			memcpy(netinfo.temp_usb_buffer, cur_packet, netinfo.received_size);
+			_free(packet);
+			return USB_SUCCESS;
+		}
+		eth_frame_t *frame = (eth_frame_t *)cur_packet->data;
+		fetch_ethernet_frame(frame, cur_packet->DataLength);
+		handled_length += cur_packet->MessageLength;
+	}
+
+	_free(packet);
 	return USB_SUCCESS;
 }

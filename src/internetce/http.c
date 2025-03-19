@@ -23,47 +23,19 @@ http_data_list_t *http_data_list = NULL;
 
 web_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_header) {
 	char pointer_to_null = 0x00;
-	return http_request("GET", url, data, keep_http_header, &pointer_to_null);
+	return http_request("GET", url, data, keep_http_header, &pointer_to_null, false);
 }
 
-web_status_t web_HTTPPost(const char* url, http_data_t **data, bool keep_http_header,
-						   int nb_params, ...) {
-	// TODO escape special chars such as '&'
-	if(nb_params == 0) {
-		char pointer_to_null = 0x00;
-		return http_request("POST", url, data, keep_http_header, &pointer_to_null);
-	}
-	size_t param_len = 0;
-	char *params = malloc(1);  /* To be reallocated */
-	va_list list_params;
-	va_start(list_params, nb_params);
-	/* Turning the va parameters into a string like "param1=v1&param2=v2...paramN=vN\0" */
-	for(uint8_t i = 0; i < nb_params * 2; i += 2) {
-		const char *arg_name = va_arg(list_params, const char*);
-		const char *arg_value = va_arg(list_params, const char*);
-		const size_t new_param_size = strlen(arg_name) + strlen(arg_value) + 2 /* '=' and '&' */;
-		void *tmp = realloc(params, param_len + new_param_size + 1 /* 1='\0' */);
-		if(tmp == NULL) {
-			free(params);
-			return WEB_NOT_ENOUGH_MEM;
-		}
-		params = tmp;
-		snprintf(&params[param_len], new_param_size + 1 /* 1='\0' */, "%s=%s&", arg_name, arg_value);
-		param_len += new_param_size;
-	}
-	params[param_len - 1] = '\0';  /* Replacing the last & with the NULL char */
-	va_end(list_params);
-
-	/* The NULL char is already taken into account in param_len */
-	const size_t max_size_chars = 5;  /* len(MAX_UINT16_T) == len('65535') == 5 */
-	const size_t post_info_size = strlen(POST_HTTP_INFO) - (2 * 2) /* 2 '%s' */ + max_size_chars + param_len;
-	char post_info[post_info_size];
-	snprintf(post_info, post_info_size, POST_HTTP_INFO, param_len, params);
-	free(params);
-
-	web_status_t status = http_request("POST", url, data, keep_http_header, post_info);
-	return status;
+web_status_t web_HTTPSGet(const char* url, http_data_t **data, bool keep_http_header) {
+	char pointer_to_null = 0x00;
+	return http_request("GET", url, data, keep_http_header, &pointer_to_null, true);
 }
+
+#define web_HTTPPost(url, data, keep_http_header, nb_params, ...) \
+		send_post_request(url, data, keep_http_header, false, __VA_ARGS__)
+
+#define web_HTTPSPost(url, data, keep_http_header, nb_params, ...) \
+		send_post_request(url, data, keep_http_header, true, __VA_ARGS__)
 
 int web_UnlockData(http_data_t **http_data) {
 	if(!os_EnoughMem((*http_data)->size)) {
@@ -147,18 +119,52 @@ uint32_t ip_ascii_to_hex(const char *ipstr) {
 	return ip;
 }
 
-web_status_t http_request(const char *request_type, const char* url, http_data_t **data, bool keep_http_header,
-                          char *params) {
-	/* HTTPS not supported yet */
-	const char *https_str = "https://";
-	if(!strcmp(url, https_str)) {
-		dbg_err("HTTPS not supported");
-		return WEB_NOT_SUPPORTED;
+web_status_t send_post_request(const char* url, http_data_t **data, bool keep_http_header, bool is_https, int nb_params, ...) {
+	// TODO escape special chars such as '&'
+	if(nb_params == 0) {
+		char pointer_to_null = 0x00;
+		return http_request("POST", url, data, keep_http_header, &pointer_to_null, is_https);
 	}
+	size_t param_len = 0;
+	char *params = _malloc(1, "httpp");  /* To be reallocated */
+	va_list list_params;
+	va_start(list_params, nb_params);
+	/* Turning the va parameters into a string like "param1=v1&param2=v2...paramN=vN\0" */
+	for(uint8_t i = 0; i < nb_params * 2; i += 2) {
+		const char *arg_name = va_arg(list_params, const char*);
+		const char *arg_value = va_arg(list_params, const char*);
+		const size_t new_param_size = strlen(arg_name) + strlen(arg_value) + 2 /* '=' and '&' */;
+		void *tmp = _realloc(params, param_len + new_param_size + 1 /* 1='\0' */);
+		if(tmp == NULL) {
+			_free(params);
+			return WEB_NOT_ENOUGH_MEM;
+		}
+		params = tmp;
+		snprintf(&params[param_len], new_param_size + 1 /* 1='\0' */, "%s=%s&", arg_name, arg_value);
+		param_len += new_param_size;
+	}
+	params[param_len - 1] = '\0';  /* Replacing the last & with the NULL char */
+	va_end(list_params);
 
-	/* Ignoring http:// */
+	/* The NULL char is already taken into account in param_len */
+	const size_t max_size_chars = 5;  /* len(MAX_UINT16_T) == len('65535') == 5 */
+	const size_t post_info_size = strlen(POST_HTTP_INFO) - (2 * 2) /* 2 '%s' */ + max_size_chars + param_len;
+	char post_info[post_info_size];
+	snprintf(post_info, post_info_size, POST_HTTP_INFO, param_len, params);
+	_free(params);
+
+	web_status_t status = http_request("POST", url, data, keep_http_header, post_info, is_https);
+	return status;
+}
+
+web_status_t http_request(const char *request_type, const char* url, http_data_t **data, bool keep_http_header,
+                          char *params, bool is_https) {
+	/* Ignoring http:// or https:// */
+	const char *https_str = "https://";
 	const char *http_str = "http://";
-	if(!strcmp(url, http_str)) {
+	if(is_https && strncmp(url, https_str, strlen(https_str)) == 0) {
+		url += 8;
+	} else if(!is_https && strncmp(url, http_str, strlen(http_str)) == 0) {
 		url += 7;
 	}
 
@@ -187,30 +193,61 @@ web_status_t http_request(const char *request_type, const char* url, http_data_t
 	}
 
 	/* Configuring request information */
-	http_exchange_t *http_exch = malloc(sizeof(http_exchange_t));
+	http_exchange_t *http_exch = _malloc(sizeof(http_exchange_t), "httpx");
+	if(http_exch == NULL) {
+		return WEB_NOT_ENOUGH_MEM;
+	}
 	memset(http_exch, 0, sizeof(http_exchange_t));
 	http_exch->buffer_size = 536;  /* Starting size, will be resized later */
 	http_exch->data = data;
-	http_exch->buffer = malloc(http_exch->buffer_size);
+	http_exch->buffer = _malloc(http_exch->buffer_size, "httpb");
+	if(http_exch->buffer == NULL) {
+		_free(http_exch);
+		return WEB_NOT_ENOUGH_MEM;
+	}
 	http_exch->keep_http_header = keep_http_header;
     http_exch->timeout = false;
-    tcp_exchange_t *tcp_exch = web_TCPConnect(ip, HTTP_PORT, fetch_http_msg, http_exch);
-    if(tcp_exch == NULL) {
-		free(http_exch);
-		return WEB_TIMEOUT;
+	http_exch->dirty = false;
+	void *exchange;  /* Opaque type depending on the underlying protocol used to send data (TCP or TLS) */
+	if(is_https) {
+		exchange = web_TLSConnect(ip, HTTPS_PORT, websitename, fetch_http_msg, http_exch);
+	} else {
+		exchange = web_TCPConnect(ip, HTTP_PORT, fetch_http_msg, http_exch);
 	}
-	delay_event(TIMEOUT_HTTP * 1000, boolean_scheduler, boolean_destructor, &http_exch->timeout);
+    if(exchange == NULL) {
+		_free(http_exch->buffer);
+		_free(http_exch);
+		return WEB_ERROR_FAILED;
+	}
+	web_status_t ret_val = delay_event(TIMEOUT_HTTP * 1000, boolean_scheduler, boolean_destructor, &http_exch->timeout);
+	if(ret_val != WEB_SUCCESS) {
+		if(is_https) {
+			web_TLSClose(exchange, true);
+		} else {
+			web_TCPClose(exchange, true);
+		}
+		_free(http_exch->buffer);
+		_free(http_exch);
+		return ret_val;
+	}
 
 	/* Building HTTP request */
 	uint24_t length = (strlen(BASIC_HTTP_REQUEST) - (4 * 2) /* 4 '%s' options */ + strlen(request_type) +
 					  !has_path /* if no path, add 1 for '/' char */ + strlen(url) + strlen(params));
 	
-	char request[length + 1];  /* 1='\0' */
-	snprintf(request, length + 1, BASIC_HTTP_REQUEST, request_type, has_path ? &url[websitelen] : "/", websitename,
-			 params);
+	char request[length + 1];
+	snprintf(request, length + 1, BASIC_HTTP_REQUEST, request_type, has_path ? &url[websitelen] : "/", websitename, params);
 
 	/* Sending HTTP request */
-	web_DeliverTCPSegment(tcp_exch, request, length, FLAG_TCP_ACK | FLAG_TCP_PSH, 0, NULL);
+	if(is_https) {
+		ret_val = web_DeliverTLSData(exchange, request, length);
+	} else {
+		ret_val = web_DeliverTCPSegment(exchange, request, length);
+	}
+	if(ret_val != WEB_SUCCESS) {
+		http_exch->dirty = true;
+		http_exch->status = ret_val;
+	}
 
 	/* Waiting for the end of the request */
 	while(!http_exch->dirty) {
@@ -218,37 +255,29 @@ web_status_t http_request(const char *request_type, const char* url, http_data_t
 		if(http_exch->timeout) {
 			http_exch->dirty = true;
 			http_exch->status = WEB_TIMEOUT;
-			dbg_err("Timeout");
+			dbg_err("HTTP Timeout");
 		}
 	}
 	remove_event(&http_exch->timeout);
 
 	const web_status_t ret_status = http_exch->status;
-	if(http_exch->buffer != NULL) {
-		free(http_exch->buffer);
+	const bool is_succeeded = ret_status >= 100;  /* 100 = minimum HTTP status code, below this is the lib status codes */
+	if(is_https) {
+		web_TLSClose(exchange, !is_succeeded);
+	} else {
+		web_TCPClose(exchange, !is_succeeded);
 	}
-	web_TCPClose(tcp_exch);
-	free(http_exch);
+	_free(http_exch->buffer);
+	_free(http_exch);
+
+	/* To send the FIN and potential ACK segments (in case the user quits) */
+	force_send_queue();
+
 	return ret_status;
 }
 
-void fill_window(char *window, size_t size_window, tcp_segment_list_t *cur_seg, size_t chunk_offset) {
-	const size_t chars_remaining = cur_seg->pl_length - chunk_offset;
-	if(chars_remaining < size_window) {
-		memcpy(window, cur_seg->payload + chunk_offset, chars_remaining);
-		const tcp_segment_list_t *next_seg = cur_seg->next;
-		if(!next_seg) {
-			memset(window + chars_remaining, 0, size_window - chars_remaining);
-		} else {
-			memcpy(window + chars_remaining, next_seg->payload, size_window - chars_remaining);
-		}
-	} else {
-		memcpy(window, cur_seg->payload + chunk_offset, size_window);
-	}
-}
-
 web_status_t return_http_data(http_exchange_t *exch) {
-	http_data_list_t *new_http_data_el = malloc(sizeof(http_data_list_t));
+	http_data_list_t *new_http_data_el = _malloc(sizeof(http_data_list_t), "httpd");
 	if(new_http_data_el == NULL) {
 		exch->dirty = true;
 		exch->status = WEB_NOT_ENOUGH_MEM;
@@ -267,7 +296,7 @@ web_status_t return_http_data(http_exchange_t *exch) {
 	}
 	if(n > 9999) {
 		exch->dirty = true;
-		free(new_http_data_el);
+		_free(new_http_data_el);
 		exch->status = WEB_NOT_ENOUGH_MEM;
 		return WEB_NOT_ENOUGH_MEM;
 	}
@@ -278,7 +307,7 @@ web_status_t return_http_data(http_exchange_t *exch) {
 	*exch->data = os_CreateAppVar(varstorage_name, final_size);
 	if(!(*exch->data)) {
 		exch->dirty = true;
-		free(new_http_data_el);
+		_free(new_http_data_el);
 		exch->status = WEB_NOT_ENOUGH_MEM;
 		return WEB_NOT_ENOUGH_MEM;
 	}
@@ -300,7 +329,7 @@ web_status_t return_http_data(http_exchange_t *exch) {
 			size_t chunk_size = get_chunk_size(src_ptr, end_buffer, &chunk_chars);
 			if(chunk_size == 0xffffff) {
 				os_DelAppVar(varstorage_name);
-				free(new_http_data_el);
+				_free(new_http_data_el);
 				exch->dirty = true;
 				exch->status = WEB_ERROR_FAILED;
 				dbg_err("Unexpected chunk size");
@@ -316,7 +345,6 @@ web_status_t return_http_data(http_exchange_t *exch) {
 		if(final_size != offset) {
 			dbg_warn("The appvar is too big/small:");
 			dbg_warn("Appvar size=%u, needed=%u", final_size, offset);
-			pause();
 		}
 	}
 
@@ -383,7 +411,7 @@ int search_content_size(http_exchange_t *exch) {
 		}
 		exch->content_length += exch->header_length;
 		exch->buffer_size = exch->content_length;
-		void *temp_mem = realloc(exch->buffer, exch->buffer_size);
+		void *temp_mem = _realloc(exch->buffer, exch->buffer_size);
 		if(temp_mem == NULL) {
 			dbg_err("Not enough memory");
 			return -3;
@@ -397,19 +425,37 @@ int search_content_size(http_exchange_t *exch) {
 			exch->data_chunked = true;
 			exch->offset_next_chunk = exch->header_length;  /* Considering that the header is the first chunk */
 		} else {
-			return -1;
+			/* We'll have to detect the end of the data with the FIN segment */
+			dbg_info("No length specified");
 		}
 	}
 	return 0;
 }
 
-web_status_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t length,
+web_status_t fetch_http_msg(web_port_t port, link_msg_type_t msg_type, void *msg, size_t length,
 							web_callback_data_t *user_data) {
-	(void)port; (void)protocol;  /* Unused parameter */
+	(void)port;  /* Unused parameter */
 	http_exchange_t *exch = (http_exchange_t *)user_data;
 
+	if(exch->dirty) {
+		return WEB_ERROR_FAILED;
+	}
+
+	if(msg_type == LINK_MSG_TYPE_RST) {
+		exch->dirty = true;
+		exch->status = WEB_CONNECTION_TERMINATION_ERROR;
+		dbg_err("Aborted connection");
+		return WEB_ERROR_FAILED;
+	} else if(msg_type == LINK_MSG_TYPE_FIN) {
+		dbg_info("Server closed the connection");
+		return return_http_data(exch);
+	} else if(msg_type != LINK_MSG_TYPE_DATA) {
+		dbg_warn("Unexpected HTTP error");
+		return WEB_SUCCESS;
+	}
+
 	const size_t previous_content_size = exch->content_received;
-	exch->content_received += length;
+	const size_t next_content_size = previous_content_size + length;
 
 	/*
 	 * First process: Copying the data into a realloced buffer
@@ -417,49 +463,48 @@ web_status_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 	 * Then we alloc (at least) twice as memory as it was previously alloced
 	 * Otherwise, it means the content size is already known, so skipping.
 	 */
-	if((!exch->header_length || exch->data_chunked) && exch->buffer_size < exch->content_received) {
+	if(exch->buffer_size < next_content_size) {
 		/* previous_size * 1.5 until this is big enough */
-		while(exch->buffer_size < exch->content_received) {
-			exch->buffer_size = exch->buffer_size * 3 / 2;
-			if(exch->buffer_size > OS_VAR_MAX_SIZE) {
+		size_t new_buffer_size = exch->buffer_size;
+		while(new_buffer_size < next_content_size) {
+			new_buffer_size = new_buffer_size * 3 / 2;
+			if(new_buffer_size > OS_VAR_MAX_SIZE) {
 				exch->dirty = true;
 				exch->status = WEB_NOT_ENOUGH_MEM;
-				dbg_err("Not enough memory");
+				dbg_err("Payload too big (> 65KB)");
 				return WEB_NOT_ENOUGH_MEM;
 			}
 		}
-		dbg_info("Buffer grows to %uB", exch->buffer_size);
-		void *temp_mem = realloc(exch->buffer, exch->buffer_size);
+		void *temp_mem = _realloc(exch->buffer, new_buffer_size);
 		if(temp_mem == NULL) {
 			exch->dirty = true;
 			exch->status = WEB_NOT_ENOUGH_MEM;
 			dbg_err("Not enough memory");
 			return WEB_NOT_ENOUGH_MEM;
 		}
+		exch->buffer_size = new_buffer_size;
+		dbg_verb("Buffer grows to %uB", exch->buffer_size);
 		exch->buffer = temp_mem;
 	}
-	if(exch->buffer_size < exch->content_received) {
-		dbg_err("we certainly have an issue.....");
-	}
 	memcpy(exch->buffer + previous_content_size, msg, length);
+	exch->content_received = next_content_size;
 
 	/*
-	 * Second process: extracting the header to get the content-length or content encoding field
+	 * Second process: extracting the header to get the content-length, connection: close or content encoding field
 	 */
 	if(!exch->header_length) {
-		/* -4 in case the string is splitted between 2 payloads */
+		/* -4 in case the string is splitted between several payloads */
 		const size_t search_before = previous_content_size < 4 ? 0 : 4;
 		const char *hdr_end = search_field_header(exch->buffer + previous_content_size - search_before,
 												  length + search_before, "\r\n", 2);
 		if(hdr_end != 0) {
 			exch->header_length = hdr_end - (char *)exch->buffer;
 			if(search_content_size(exch) != 0) {
-				dbg_err("Content size not found and not chunk encoded");
 				exch->dirty = true;
 				exch->status = WEB_ERROR_FAILED;
 				return WEB_ERROR_FAILED;
 			} else if(exch->content_length > OS_VAR_MAX_SIZE) {
-				dbg_err("Content too big");
+				dbg_err("Payload too big (> 65KB)");
 				exch->dirty = true;
 				exch->status = WEB_NOT_ENOUGH_MEM;
 				return WEB_NOT_ENOUGH_MEM;
@@ -490,7 +535,7 @@ web_status_t fetch_http_msg(web_port_t port, uint8_t protocol, void *msg, size_t
 		}
 	}
 
-	if(exch->content_length && exch->content_length >= exch->content_received) {
+	if(exch->content_length != 0 && exch->content_received >= exch->content_length) {
 		if(exch->content_length != exch->content_received) {
 			dbg_warn("Received more data than expected");
 		}

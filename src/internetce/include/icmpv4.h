@@ -23,7 +23,7 @@
 
 web_status_t fetch_icmpv4_msg(icmpv4_echo_t *msg, size_t length, uint32_t ip_src);
 
-web_status_t ping_timeout_scheduler(web_callback_data_t *user_data);
+scheduler_status_t ping_timeout_scheduler(web_callback_data_t *user_data);
 
 void ping_timeout_destructor(web_callback_data_t *user_data);
 

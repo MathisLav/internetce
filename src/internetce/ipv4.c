@@ -42,7 +42,7 @@ msg_queue_t *_recursive_PushIPv4Packet(void *buffer, void *data, size_t length_d
 	static unsigned int nbpacket = 0;
 	if(data - sizeof(ipv4_packet_t) < buffer) {
 		dbg_err("Can't push IPv4 packet");
-		free(buffer);
+		_free(buffer);
 		return NULL;
 	}
 
@@ -76,11 +76,11 @@ uint16_t ipv4_checksum(void *header, size_t count) {
         count -= 2;
     }
 
-    if(count > 0) {
+    if(count != 0) {
         sum += *(uint8_t *)data;
 	}
 
-    while(sum >> 16) {
+    while(sum >> 16 != 0) {
         sum = (sum & 0xffff) + (sum >> 16);
 	}
 

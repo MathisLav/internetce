@@ -3,6 +3,7 @@
 
 #include "include/scheduler.h"
 #include "include/debug.h"
+#include "include/core.h"
 
 
 /**********************************************************************************************************************\
@@ -18,8 +19,8 @@ schedule_list_t *event_list = NULL;
 
 /* Note: This file has only internal functions */
 
-void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
-              web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data) {
+web_status_t schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
+                      web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data) {
     /*
         Preconditions:
             - user_data is a unique number (among all currently valid events)
@@ -27,9 +28,12 @@ void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
     */
     if(every == 0 || every > 44 * 1000) {
         dbg_err("schedule has been given bad arguments");
-        return;
+        return WEB_INVALID_ARGUMENTS;
     }
-    schedule_list_t *new_event = malloc(sizeof(schedule_list_t));
+    schedule_list_t *new_event = _malloc(sizeof(schedule_list_t), "sched");
+    if(new_event == NULL) {
+        return WEB_NOT_ENOUGH_MEM;
+    }
     new_event->every = MS_TO_TICK(every);
     new_event->schedule_callback = schedule_callback;
     new_event->destructor_callback = destructor_callback;
@@ -37,21 +41,25 @@ void schedule(uint24_t every, web_schedule_callback_t *schedule_callback,
     new_event->date = usb_GetCounter();
 
     insert_event(new_event);
+    return WEB_SUCCESS;
 }
 
-void delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
-                 web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data) {
+web_status_t delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
+                         web_destructor_callback_t *destructor_callback, web_callback_data_t *user_data) {
     /*
         Preconditions:
             - user_data is a unique number (among all currently valid events)
-            - offset_ms is in range [1, 44*1000] as counter overflows every ~ 90s
+            - offset_ms is in range [0, 44*1000] as counter overflows every ~ 90s
     */
-    if(offset_ms == 0 || offset_ms > 44 * 1000) {
+    if(offset_ms > 44 * 1000) {
         dbg_err("delay has been given bad arguments");
-        return;
+        return WEB_INVALID_ARGUMENTS;
     }
 
-    schedule_list_t *new_event = malloc(sizeof(schedule_list_t));
+    schedule_list_t *new_event = _malloc(sizeof(schedule_list_t), "delay");
+    if(new_event == NULL) {
+        return WEB_NOT_ENOUGH_MEM;
+    }
     new_event->every = 0;  /* only once */
     new_event->schedule_callback = schedule_callback;
     new_event->destructor_callback = destructor_callback;
@@ -59,6 +67,7 @@ void delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_callback,
     new_event->date = usb_GetCounter() + MS_TO_TICK(offset_ms);
 
     insert_event(new_event);
+    return WEB_SUCCESS;
 }
 
 web_status_t remove_event(web_callback_data_t *user_data) {
@@ -74,7 +83,7 @@ web_status_t remove_event(web_callback_data_t *user_data) {
             if(cur_event->destructor_callback != NULL) {
                 cur_event->destructor_callback(cur_event->user_data);
             }
-            free(cur_event);
+            _free(cur_event);
             return WEB_SUCCESS;
         }
         prv_event = cur_event;
@@ -91,7 +100,7 @@ void flush_event_list() {
         if(cur_event->destructor_callback != NULL) {
             cur_event->destructor_callback(cur_event->user_data);
         }
-        free(cur_event);
+        _free(cur_event);
         cur_event = next_event;
     }
     event_list = NULL;
@@ -132,39 +141,33 @@ void insert_event(schedule_list_t *new_event) {
     }
 }
 
-void update_event_time() {
-    schedule_list_t *cur_event = event_list;
-    event_list = cur_event->next;
-    if(cur_event->every != 0) {
-        cur_event->date = usb_GetCounter() + cur_event->every;
-        insert_event(cur_event);
-    } else {
-        if(cur_event->destructor_callback != NULL) {
-            cur_event->destructor_callback(cur_event->user_data);
-         }
-        free(cur_event);
-    }
-}
-
 web_status_t dispatch_time_events() {
     const uint24_t now = usb_GetCounter();
-    web_status_t status;
     schedule_list_t *cur_event;
     while(event_list != NULL && (int24_t)(now - event_list->date) > 0) {
         cur_event = event_list;
-        update_event_time();
-        status = cur_event->schedule_callback(cur_event->user_data);
-        if(status != WEB_SUCCESS) {
-            return status;
+        event_list = cur_event->next;
+        scheduler_status_t status = SCHEDULER_DESTROY;
+        if(cur_event->schedule_callback != NULL) {
+            status = cur_event->schedule_callback(cur_event->user_data);
+        }
+        if(cur_event->every == 0 || status == SCHEDULER_DESTROY) {
+            if(cur_event->destructor_callback != NULL) {
+                cur_event->destructor_callback(cur_event->user_data);
+            }
+            _free(cur_event);
+        } else {
+            cur_event->date = usb_GetCounter() + cur_event->every;
+            insert_event(cur_event);
         }
     }
     return WEB_SUCCESS;
 }
 
-web_status_t boolean_scheduler(web_callback_data_t *user_data) {
+scheduler_status_t boolean_scheduler(web_callback_data_t *user_data) {
 	bool *is_timeout = (bool *)user_data;
 	*is_timeout = true;
-	return WEB_SUCCESS;
+	return SCHEDULER_DESTROY;
 }
 
 void boolean_destructor(web_callback_data_t *user_data) {
