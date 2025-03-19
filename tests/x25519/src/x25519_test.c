@@ -24,7 +24,7 @@ static const uint8_t point9[32] = {9, 0 /* 30 zeros */};
 
 int main(void)
 {
-    uint8_t *out = (uint8_t *)(0xd40000 + 320*240*2 - 32);  // Should be safe enough
+    uint8_t *out = (uint8_t *)(0xd40000 + 320*240*2 - 32);  /* Should be safe enough */
 
     for(int i=0; i<NUMBER_AUTOTESTS; i++) {
         x25519_scalarmult(out, point9, scalars[i]);

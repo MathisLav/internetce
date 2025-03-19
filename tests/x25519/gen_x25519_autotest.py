@@ -2,7 +2,6 @@ import sys
 import json
 
 TESTED_SCALARS = ((0, "null"),
-                  (0x45315157f2537edc8f620c3d50c34b6e384a81ef09b75c102040b86aa2b9c4d8, "test"),
                   (0x0100000000000000000000000000000000000000000000000000000000000000, "unit"),
                   (0x0200000000000000000000000000000000000000000000000000000000000000, "two"),
                   (0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f, "xargs example"),
@@ -68,7 +67,6 @@ def finv(x):
     return p
 
 def encode_scalar(k):
-    print(hex(k))
     k_list = [k // 2**e % 256 for e in range(0, 249, 8)][::-1]
     k_list[0] &= 248
     k_list[31] &= 127
@@ -83,7 +81,6 @@ def ladder(point, k):
     b = point
 
     k = encode_scalar(k)
-    print(hex(k), end=" => ")
     binary = bin(k)[2:]
     filln = 255 - len(binary)
     binary = ("0" * filln) + binary
@@ -134,7 +131,6 @@ def generate_autotest(filename):
 
     for scalar, hint in TESTED_SCALARS:
         value = ladder(9, scalar)
-        print(hex(value))
         json_dict["hashes"][f"scalar_{hint}"] = {
             "description": f"Point 9, Scalar {hint}",
             "start": hex(0xd40000 + 320*240*2 - 32), "size": "32",

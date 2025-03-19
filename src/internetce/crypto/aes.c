@@ -21,7 +21,7 @@ cipher_callbacks_t aes128gcm_callbacks = {
 
 web_callback_data_t *aes128gcm_init_callback(uint8_t cipher_key[AES_128_KEY_SIZE], uint8_t cipher_iv[AES_128_IV_SIZE],
                                              uint8_t decipher_key[AES_128_KEY_SIZE], uint8_t decipher_iv[AES_128_IV_SIZE]) {
-    aes128gcm_data_t *cipher_struct = _malloc(sizeof(aes128gcm_data_t));
+    aes128gcm_data_t *cipher_struct = _malloc(sizeof(aes128gcm_data_t), "aesi");
     if(cipher_struct == NULL) {
         dbg_err("No memory");
         return NULL;
@@ -48,6 +48,9 @@ void aes128gcm_free_callback(web_callback_data_t *cipher_data) {
 
 web_status_t aes128gcm_cipher_callback(void *dest, void *source, size_t length, void *aad, size_t aad_length,
                                        web_callback_data_t *user_data) {
+    if(user_data == NULL) {
+        dbg_err("NULL cipher_data");
+    }
     aes128gcm_endpoint_data_t *cipher_data = &((aes128gcm_data_t *)user_data)->cipher_data;
     uint8_t current_iv[12];
     memcpy(current_iv, cipher_data->static_iv, 12);
@@ -63,6 +66,9 @@ web_status_t aes128gcm_cipher_callback(void *dest, void *source, size_t length, 
 
 web_status_t aes128gcm_decipher_callback(void *dest, void *source, size_t length, void *aad, size_t aad_length,
                                          web_callback_data_t *user_data) {
+    if(user_data == NULL) {
+        dbg_err("NULL cipher_data");
+    }
     aes128gcm_endpoint_data_t *decipher_data = &((aes128gcm_data_t *)user_data)->decipher_data;
     uint8_t current_iv[12];
     memcpy(current_iv, decipher_data->static_iv, 12);

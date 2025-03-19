@@ -21,7 +21,13 @@
 /**
  * Change this define to make the lib more or less verbose
  */
-#define DEBUG_LEVEL DEBUG_INFO
+#define DEBUG_LEVEL NO_DEBUG
+
+typedef struct alloced_mem {
+	void *ptr;
+	struct alloced_mem *next;
+	char id[10];
+} alloced_mem_t;
 
 
 #if DEBUG_LEVEL == NO_DEBUG
@@ -82,7 +88,7 @@
 #endif
 
 
-void *_malloc(size_t size);
+void *_malloc(size_t size, const char *id);
 
 void *_realloc(void *ptr, size_t size);
 

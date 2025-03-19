@@ -68,6 +68,11 @@ typedef enum web_status {
 	HTTP_STATUS_SERVICE_UNAVAILABLE = 503
 } web_status_t;
 
+typedef enum scheduler_status {
+	SCHEDULER_AGAIN,
+	SCHEDULER_DESTROY,
+} scheduler_status_t;
+
 /**
  * DHCP communication states.
  */
@@ -136,48 +141,6 @@ typedef enum tls_state {
 	TLS_STATE_CLOSED,
 } tls_state_t;
 
-typedef enum tls_alert_level {
-	TLS_ALERT_LEVEL_WARNING	= 1,
-	TLS_ALERT_LEVEL_FATAL	= 2
-} tls_alert_level_t;
-
-typedef enum tls_alert_description {
-	TLS_ALERT_CLOSE_NOTIFY						= 0,
-	TLS_ALERT_UNEXPECTED_MESSAGE				= 10,
-	TLS_ALERT_BAD_RECORD_MAC					= 20,
-	TLS_ALERT_DECRYPTION_FAILED_RESERVED		= 21,
-	TLS_ALERT_RECORD_OVERFLOW					= 22,
-	TLS_ALERT_DECOMPRESSION_FAILURE_RESERVED	= 30,
-	TLS_ALERT_HANDSHAKE_FAILURE					= 40,
-	TLS_ALERT_NO_CERTIFICATE_RESERVED			= 41,
-	TLS_ALERT_BAD_CERTIFICATE					= 42,
-	TLS_ALERT_UNSUPPORTED_CERTIFICATE			= 43,
-	TLS_ALERT_CERTIFICATE_REVOKED				= 44,
-	TLS_ALERT_CERTIFICATE_EXPIRED				= 45,
-	TLS_ALERT_CERTIFICATE_UNKNOWN				= 46,
-	TLS_ALERT_ILLEGAL_PARAMETER					= 47,
-	TLS_ALERT_UNKNOWN_CA						= 48,
-	TLS_ALERT_ACCESS_DENIED						= 49,
-	TLS_ALERT_DECODE_ERROR						= 50,
-	TLS_ALERT_DECRYPT_ERROR						= 51,
-	TLS_ALERT_EXPORT_RESTRICTION_RESERVED		= 60,
-	TLS_ALERT_PROTOCOL_VERSION					= 70,
-	TLS_ALERT_INSUFFICIENT_SECURITY				= 71,
-	TLS_ALERT_INTERNAL_ERROR					= 80,
-	TLS_ALERT_INAPPROPRIATE_FALLBACK			= 86,
-	TLS_ALERT_USER_CANCELED						= 90,
-	TLS_ALERT_NO_RENEGOTIATION_RESERVED			= 100,
-	TLS_ALERT_MISSING_EXTENSION					= 109,
-	TLS_ALERT_UNSUPPORTED_EXTENSION				= 110,
-	TLS_ALERT_CERTIFICATE_UNOBTAINABLE_RESERVED	= 111,
-	TLS_ALERT_UNRECOGNIZED_NAME					= 112,
-	TLS_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE	= 113,
-	TLS_ALERT_BAD_CERTIFICATE_HASH_VALUE_RESERVED	= 114,
-	TLS_ALERT_UNKNOWN_PSK_IDENTITY				= 115,
-	TLS_ALERT_CERTIFICATE_REQUIRED				= 116,
-	TLS_ALERT_NO_APPLICATION_PROTOCOL			= 120
-} tls_alert_description_t;
-
 typedef enum tls_hs_msg_type {
 	TLS_HS_TYPE_CLIENT_HELLO			= 1,
 	TLS_HS_TYPE_SERVER_HELLO			= 2,
@@ -217,6 +180,11 @@ typedef enum tls_hs_sender_msg_type {
 	TLS_HS_CLIENT_CERTIFICATE_VERIFY	= TO_HS_SENDER_TYPE(TLS_HS_TYPE_CERTIFICATE_VERIFY, 	TLS_SENDER_CLIENT),
 	TLS_HS_CLIENT_FINISHED				= TO_HS_SENDER_TYPE(TLS_HS_TYPE_FINISHED, 				TLS_SENDER_CLIENT),
 } tls_hs_sender_msg_type_t;
+
+typedef enum key_update_request_type {
+	TLS_KEY_UPDATE_NOT_REQUESTED = 0,
+	TLS_KEY_UPDATE_REQUESTED = 1,
+} key_update_request_type_t;
 
 
 /**
@@ -270,7 +238,7 @@ typedef web_status_t (web_dns_callback_t)(web_port_t port, uint32_t res_ip, web_
 /**
  * The callback called for a schedule event
  */
-typedef web_status_t (web_schedule_callback_t)(web_callback_data_t *user_data);
+typedef scheduler_status_t (web_schedule_callback_t)(web_callback_data_t *user_data);
 
 /**
  * The callback used to inform the user that the object (event, ...) will be destroyed
@@ -399,7 +367,7 @@ typedef struct rndis_packet_msg {
 	uint32_t PerPacketInfoLength;
 	uint32_t VcHandle;			/**< Must be 0										*/
 	uint32_t Reserved;			/**< Must be 0										*/
-	uint8_t data[0];
+	uint8_t data[];
 } rndis_packet_msg_t;
 
 
@@ -514,6 +482,10 @@ typedef struct tls_extension {
 typedef struct tls_handshake {
 	uint8_t hs_type;
 	uint24_t length;
+} tls_handshake_t;
+
+typedef struct tls_hello {
+	tls_handshake_t header;
 	uint16_t version;
 	uint8_t random[32];
 	uint8_t zero;			/**< Session ID not used in TLS 1.3						*/
@@ -521,18 +493,54 @@ typedef struct tls_handshake {
 	// uint8_t compression_methods_size;
 	// uint8_t zero			/**< no compression methods in TLS 1.3					*/
 	// uint8_t extensions[];
-} tls_handshake_t;
+} tls_hello_t;
 
 typedef struct tls_finished {
-	uint8_t hs_type;
-	uint24_t length;
-	uint8_t data[];
+	tls_handshake_t header;
+	uint8_t hash[];
 } tls_finished_t;
 
 typedef struct tls_alert_record {
 	uint8_t alert_level;
 	uint8_t alert_description;
 } tls_alert_record_t;
+
+typedef struct tls_key_update {
+	tls_handshake_t header;
+	uint8_t key_update_request;
+} tls_key_update_t;
+
+typedef struct tls_encrypted_extensions {
+	tls_handshake_t header;
+	uint16_t extensions_size;
+	uint8_t extensions[];
+} tls_encrypted_extensions_t;
+
+
+
+typedef struct tls_cert_request {
+	tls_handshake_t header;
+	uint8_t context_size;
+	uint8_t context[];
+	// uint16_t extensions_size;
+	// uint8_t extensions[];
+} tls_cert_request_t;
+
+typedef struct tls_session_ticket {
+	uint32_t lifetime;
+	uint32_t age_add;
+	uint8_t nonce_length;
+	uint8_t nonce[];
+	// uint16_t ticket_length;
+	// uint8_t ticket[];
+	// uint16_t extensions_length;
+	// uint8_t extensions[];
+} tls_session_ticket_t;
+
+typedef struct tls_new_session_ticket {
+	tls_handshake_t header;
+	tls_session_ticket_t ticket;
+} tls_new_session_ticket_t;
 
 typedef struct network_pseudo_hdr {
     uint32_t ip_src;
@@ -625,6 +633,7 @@ typedef struct tls_exchange {
 	uint8_t *client_private_key;		/**< The private key of the client									*/
 	uint8_t *current_server_traffic_secret;	/**< The current server traffic secret							*/
 	uint8_t *current_client_traffic_secret;	/**< The current client traffic secret							*/
+	uint8_t *res_master_secret;			/**< The resumption master secret derived from the key schedule		*/	
 	cipher_callbacks_t *cipher_callbacks;
 	web_callback_data_t *cipher_data;
 	web_appli_callback_t *appli_callback;	/**< Callback when a packet is addressed to this connection		*/
@@ -724,7 +733,7 @@ void web_Init();
 void web_Cleanup();
 
 /**
- *	@brief	Performs a HTTP GET request to \c url and stores the address of the data in
+ *	@brief	Performs an HTTP GET request to \c url and stores the address of the data in
  *	\c *data. Waits until the transfer finishes.
  *	@param	url	The target URL.
  *	@param	data This function will update *data to be the address where the downloaded data is.
@@ -737,8 +746,24 @@ void web_Cleanup();
 web_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_header);
 
 /**
- *	@brief	Performs a HTTP POST request to \c url and stores the address of the data in \c *data.
- 			Waits until the transfer finishes.
+ *	@brief	Performs an HTTPS (secured HTTP) GET request to \c url and stores the address
+ *	of the data in \c *data. Waits until the transfer finishes.
+ *	@param	url	The target URL.
+ *	@param	data This function will update *data to be the address where the downloaded data is.
+ *	@param	keep_http_header If true, *data begins with the HTTP header.
+ *	@returns The HTTP status code of the request or an error. See \c web_status_t
+ *			 for more information.
+ *	@warning The content returned by this function in data is in READ-ONLY !
+ *			 Please use \c unlock_data() to write on \c data.
+ *	@note	 This is the secured version of web_HTTPGet, using TLS.
+ *			 Be aware that it will take much more time than web_HTTPGet.
+ *	@warning THIS IS NOT A "PROFESSIONAL" IMPLEMENTATION OF TLS. DO NOT SEND SENSITIVE DATA THROUGH IT!
+ */
+web_status_t web_HTTPSGet(const char* url, http_data_t **data, bool keep_http_header);
+
+/**
+ *	@brief	Performs an HTTP POST request to \c url and stores the address of the data in \c *data.
+ *			Waits until the transfer finishes.
  *	@param	url	The target URL.
  *	@param	data When successful, \c *data is the address of the received HTTP content.
  *	@param	keep_http_header If true, *data begins with the HTTP header.
@@ -750,6 +775,24 @@ web_status_t web_HTTPGet(const char* url, http_data_t **data, bool keep_http_hea
  *			 Please use \c unlock_data() to write on \c data.
  */
 web_status_t web_HTTPPost(const char* url, http_data_t **data, bool keep_http_header, int nb_params, ...);
+
+/**
+ *	@brief	Performs an HTTPS (secured HTTP) POST request to \c url and stores the address
+ *			of the data in \c *data. Waits until the transfer finishes.
+ *	@param	url	The target URL.
+ *	@param	data When successful, \c *data is the address of the received HTTP content.
+ *	@param	keep_http_header If true, *data begins with the HTTP header.
+ *	@param	nb_params Number of additionnal parameters of the POST request.
+ *	@params ... Additionnal parameters. Must be of const char* type.
+ *	@example HTTPPost("www.google.com", &data, true, 2, "Age", "21", "Name", "Epharius");
+ *	@returns The HTTP status code of the request or an error. See \c web_status_t for more information.
+ *	@warning The content returned by this function in data is in READ-ONLY !
+ *			 Please use \c unlock_data() to write on \c data.
+ *	@note	 This is the secured version of web_HTTPPost, using TLS.
+ *			 Be aware that it will take much more time than web_HTTPPost.
+ *	@warning THIS IS NOT A "PROFESSIONAL" IMPLEMENTATION OF TLS. DO NOT SEND SENSITIVE DATA THROUGH IT!
+ */
+web_status_t web_HTTPSPost(const char* url, http_data_t **data, bool keep_http_header, int nb_params, ...);
 
 /**
  *	@brief	Unlocks the data so it can be modified.
@@ -784,27 +827,18 @@ tls_exchange_t *web_TLSConnect(uint32_t ip_dst, web_port_t port_dst, const char 
  * @brief	Close a TLS connection.
  * @note	The \c tls_exchange_t structure can't be used after calling this function.
  * @param	tls_exch The \c tls_exchange_t structure returned by \c web_TLSConnect.
- * @param	reason The reason of the closure (see \c tls_alert_description_t enum).
+ * @param	is_abort If true, the connection will be aborted and the server will be sent an error.
  */
-void web_TLSClose(tls_exchange_t *tls_exch, tls_alert_description_t reason);
+void web_TLSClose(tls_exchange_t *tls_exch, bool is_abort);
 
 /**
- * TODO
+ *  @brief	Deliver a TLS data to the host connected to \c tls_exch.
+ * 	@param	tls_exch The TLS exchange structure, returned by \c web_TLSConnect.
+ * 	@param	data The data that must be delivered.
+ * 	@param	length The length of the data.
+ * 	@returns  \c WEB_SUCCESS or an error.
  */
-web_status_t web_DeliverTLSRecord(tls_exchange_t *tls_exch, void *data, size_t length_data, tls_content_type_t tls_type);
-
-/**
- * TODO
- */
-web_status_t web_DeliverTLSData(tls_exchange_t *tls_exch, void *data, size_t length_data);
-
-/**
- * @brief	Sends a TLS alert to the server.
- * @param	tls_exch The \c tls_exchange_t structure returned by \c web_TLSConnect.
- * @param	alert_desc The alert description (see \c tls_alert_description_t enum).
- * @returns \c WEB_SUCCESS or an error.
- */
-web_status_t web_SendTLSAlert(tls_exchange_t *tls_exch, tls_alert_description_t alert_desc);
+web_status_t web_DeliverTLSData(tls_exchange_t *tls_exch, void *data, size_t length);
 
 /**
  *	@brief	Sends a DNS request to the router's default DNS Server. Waits until the request finishes.
@@ -853,10 +887,9 @@ web_status_t web_TCPClose(tcp_exchange_t *tcp_exch, bool is_abort);
  * 	@param	tcp_exch The TCP exchange structure, returned by web_TCPConnect.
  * 	@param	data The data that must be delivered.
  * 	@param	length The length of the data.
- * 	@param	flags The TCP flags to send. If equals to 0 or \c FLAG_TCP_NONE, this will be set to \c FLAG_TCP_ACK.
  * 	@returns  \c WEB_SUCCESS or an error.
  */
-web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length, uint16_t flags);
+web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length);
 
 /**
  *	@brief	Schedules the delivery of a TCP segment.

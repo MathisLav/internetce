@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "include/debug.h"
 #include "include/core.h"
@@ -34,9 +35,9 @@ void printf_xy(unsigned int xpos, unsigned int ypos, const char *format, ...) {
 #if DEBUG_LEVEL >= DEBUG_INFO
 void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t length, bool is_me) {
 	if(is_me) {
-		printf("SND: ");
+		printf("SND:");
 	} else {
-		printf("RCV: ");
+		printf("RCV:");
 	}
 	if(seg->dataOffset_flags & htons(FLAG_TCP_SYN)) {
 		printf("S");
@@ -59,28 +60,30 @@ void print_tcp_info(const tcp_segment_t *seg, tcp_exchange_t *tcp_exch, size_t l
 
 	uint32_t seq_number = htonl(seg->seq_number);
 	uint32_t ack_number = htonl(seg->ack_number);
-	if(!is_me) {
-		seq_number = ack_number;
-		ack_number = htonl(seg->seq_number);
+	if(is_me) {
+		seq_number -= tcp_exch->beg_sn;
+		ack_number -= tcp_exch->beg_ackn;
+	} else {
+		seq_number -= tcp_exch->beg_ackn;
+		ack_number -= tcp_exch->beg_sn;
 	}
-	if(tcp_exch->beg_ackn != 0) {
-		printf(" (%lu+%d)", ack_number - tcp_exch->beg_ackn, length - 4 *
-			(seg->dataOffset_flags >> 4 & 0x0f));
+	if(tcp_exch->beg_ackn != 0 && tcp_exch->beg_sn != 0) {
+		printf(" (%lu+%d)", seq_number, length - 4 * (seg->dataOffset_flags >> 4 & 0x0f));
 	}
-	printf(" a=%lu\n", seq_number - tcp_exch->beg_sn);
+	printf(" a=%lu\n", ack_number);
 }
 
-typedef struct alloced_mem {
-	void *ptr;
-	struct alloced_mem *next;
-} alloced_mem_t;
-
 static alloced_mem_t *alloced_mem_list = NULL;
-void *_malloc(size_t size) {
+void *_malloc(size_t size, const char *id) {
 	alloced_mem_t *alloced_mem = malloc(sizeof(alloced_mem_t));
 	alloced_mem->next = alloced_mem_list;
 	alloced_mem_list = alloced_mem;
 	alloced_mem->ptr = malloc(size);
+	if(id != NULL) {
+		strncpy(alloced_mem->id, id, 10);
+	} else {
+		alloced_mem->id[0] = 0x00;
+	}
 	return alloced_mem->ptr;
 }
 
@@ -98,7 +101,6 @@ void *_realloc(void *ptr, size_t size) {
 		cur_alloced = cur_alloced->next;
 	}
 	dbg_err("NOT FOUND REALLOC %p", ptr);
-	pause();
 	return NULL;
 }
 
@@ -120,24 +122,26 @@ void _free(void *ptr) {
 		cur_alloced = cur_alloced->next;
 	}
 	dbg_err("NOT FOUND %p", ptr);
-	pause();
 }
 
 void print_allocated_memory() {
 	alloced_mem_t *cur_alloced = alloced_mem_list;
-	printf("malloc: ");
 	if(alloced_mem_list == NULL) {
-		printf("None\n");
+		printf("Good memory state!\n");
 		return;
 	}
 	while(cur_alloced) {
-		// printf("%p", cur_alloced->ptr);
-		debug(cur_alloced->ptr - 4, 24);
+		if(cur_alloced->id[0] != 0x00) {
+			printf("%s ", cur_alloced->id);
+		} else {
+			debug(cur_alloced->ptr - 4, 15);
+		}
 		cur_alloced = cur_alloced->next;
 	}
 }
 #else
-void *_malloc(size_t size) {
+void *_malloc(size_t size, const char *id) {
+	(void)id;  /* Unused parameter */
 	return malloc(size);
 }
 
@@ -194,10 +198,10 @@ void monitor_usb_connection(usb_event_t event, device_state_t state) {
 			"USB_HOST_PORT_FORCE_PORT_RESUME_INTERRUPT",
 			"USB_HOST_SYSTEM_ERROR_INTERRUPT",
 	    };
-	    // if(event != USB_DEVICE_WAKEUP_INTERRUPT && event != USB_OTG_INTERRUPT && event != USB_DEVICE_DEVICE_INTERRUPT &&
-		//    event != USB_DEVICE_INTERRUPT && event != USB_HOST_INTERRUPT) {
-	    // 	printf("%s\n", usb_event_names[event]);
-	    // }
+	    if(event != USB_DEVICE_WAKEUP_INTERRUPT && event != USB_OTG_INTERRUPT && event != USB_DEVICE_DEVICE_INTERRUPT &&
+		   event != USB_DEVICE_INTERRUPT && event != USB_HOST_INTERRUPT) {
+	    	printf("%s\n", usb_event_names[event]);
+	    }
 		unsigned int x, y;
 		os_GetCursorPos(&x, &y);
 		os_SetCursorPos(0, 0);

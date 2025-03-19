@@ -76,11 +76,11 @@ uint16_t ipv4_checksum(void *header, size_t count) {
         count -= 2;
     }
 
-    if(count > 0) {
+    if(count != 0) {
         sum += *(uint8_t *)data;
 	}
 
-    while(sum >> 16) {
+    while(sum >> 16 != 0) {
         sum = (sum & 0xffff) + (sum >> 16);
 	}
 

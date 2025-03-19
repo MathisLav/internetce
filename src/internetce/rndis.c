@@ -16,6 +16,9 @@
 static rndis_state_t rndis_state = {
 	.cur_request_id = 1,
 	.max_transfer_size = 0,  /* Set later */
+	.is_resetting = false,
+	.receive_buffer = NULL,
+	.send_buffer_list = NULL,
 };
 
 static const usb_control_setup_t in_setup_buffer = (usb_control_setup_t){
@@ -23,7 +26,7 @@ static const usb_control_setup_t in_setup_buffer = (usb_control_setup_t){
 	.bRequest = 1,
 	.wValue = 0,
 	.wIndex = 0,
-	.wLength = 128
+	.wLength = RNDIS_CONTROL_BUFFER_SIZE
 };
 
 
@@ -83,27 +86,49 @@ void send_control_rndis(void *rndis_msg, size_t length) {
 		.wValue = 0,
 		.wIndex = 0,
 		.wLength = length};
-	void *buffer = _malloc(sizeof(usb_control_setup_t) + length);
-	if(buffer == NULL) {
+	allocated_memory_t *alloc_buffer = _malloc(sizeof(allocated_memory_t) + sizeof(usb_control_setup_t) + length, "rndisc");
+	if(alloc_buffer == NULL) {
 		dbg_err("No memory");
 		return;
 	}
-	void *data = buffer + sizeof(usb_control_setup_t);
-	memcpy(buffer, &out_ctrl, sizeof(usb_control_setup_t));
+	alloc_buffer->next = rndis_state.send_buffer_list;
+	rndis_state.send_buffer_list = alloc_buffer;
+	void *data = alloc_buffer->memory + sizeof(usb_control_setup_t);
+	memcpy(alloc_buffer->memory, &out_ctrl, sizeof(usb_control_setup_t));
 	memcpy(data, rndis_msg, length);
-	usb_ScheduleDefaultControlTransfer(netinfo.device, (usb_control_setup_t *)buffer, data, out_control_rndis_callback, buffer);
+
+	schedule(100, send_control_rndis_scheduler, NULL, alloc_buffer);
 }
 
-usb_error_t out_control_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
-							  		   usb_transfer_data_t *data) {
-	(void)endpoint;  /* Unused parameters */
-	if(status & USB_ERROR_NO_DEVICE || transferred == 0) {
+scheduler_status_t send_control_rndis_scheduler(web_callback_data_t *buffer) {
+	void *message = ((allocated_memory_t *)buffer)->memory;
+	usb_error_t err = usb_ScheduleDefaultControlTransfer(netinfo.device, (usb_control_setup_t *)message,
+														 message + sizeof(usb_control_setup_t), send_control_rndis_callback,
+														 buffer);
+
+	if(err & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (int)");
 		netinfo.state = STATE_USB_LOST;
-		return USB_ERROR_FAILED;
+		return SCHEDULER_DESTROY;
+	} else if(err != USB_SUCCESS) {
+		dbg_warn("(RNDIS) Unable to send");
+		return SCHEDULER_AGAIN;
 	}
 
-	_free(data);
+	return SCHEDULER_DESTROY;
+}
+
+usb_error_t send_control_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
+										usb_transfer_data_t *data) {
+	(void)transferred; (void)endpoint;  /* Unused parameter */
+
+	if(transferred == 0 || status != USB_SUCCESS) {
+		dbg_warn("Failed to send data");
+		schedule(100, send_control_rndis_scheduler, NULL, data);
+	} else {
+		free_allocated_memory(&rndis_state.send_buffer_list, data);
+	}
+
 	return USB_SUCCESS;
 }
 
@@ -116,9 +141,10 @@ void init_rndis_exchange() {
 		.MinorVersion = RNDIS_MINOR_VERSION,
 		.MaxTransferSize = MAX_RNDIS_TRANSFER_SIZE,
 	};
-	rndis_state.has_keepalive_cmplt_received = true;
+	rndis_state.not_received_keepalives_filter = 0;
 	send_control_rndis(&rndis_initmsg, sizeof(rndis_init_msg_t));
-	poll_interrupt_scheduler();
+
+	schedule(1 * 1000, poll_interrupt_scheduler, NULL, POLL_INTERRUPT_SCHED_ID);
 }
 
 void send_rndis_halt() {
@@ -147,11 +173,10 @@ void send_rndis_set_msg(uint32_t oid, const void *value, size_t value_size) {
 }
 
 void send_rndis_keepalive_msg() {
-	if(!rndis_state.has_keepalive_cmplt_received) {
-		dbg_warn("Keepalive not received");
-		// Specs would want to do that but hey, as long as everything's working...
-		// send_rndis_reset_msg(); 
-		// return;
+	if(rndis_state.not_received_keepalives_filter >= RNDIS_THRESHOLD_KEEPALIVE_FILTER) {
+		dbg_warn("Too many missed KA!");
+		send_rndis_reset_msg(); 
+		return;
 	}
 
 	rndis_keepalive_msg_t keepalive_msg = {
@@ -160,8 +185,6 @@ void send_rndis_keepalive_msg() {
 		.RequestId = rndis_state.cur_request_id++,
 	};
 	send_control_rndis(&keepalive_msg, sizeof(rndis_keepalive_msg_t));
-
-	rndis_state.has_keepalive_cmplt_received = false;
 }
 
 
@@ -184,6 +207,7 @@ void send_rndis_reset_msg() {
 	};
 
 	dbg_warn("Reset RNDIS /!\\");
+	rndis_state.is_resetting = true;
 	send_control_rndis(&reset_msg, sizeof(rndis_reset_msg_t));
 	netinfo.state = STATE_RNDIS_INIT;
 }
@@ -192,28 +216,32 @@ usb_error_t interrupt_handler(usb_endpoint_t endpoint, usb_transfer_status_t sta
 							  usb_transfer_data_t *data) {
 	(void)endpoint; (void)status; (void)transferred; (void)data;
 
+	/* Reschedule next */
+	schedule(1 * 1000, poll_interrupt_scheduler, NULL, POLL_INTERRUPT_SCHED_ID);
+
 	if(status & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (int)");
-		netinfo.state = STATE_USB_LOST;
+		send_rndis_reset_msg();
 		return USB_ERROR_FAILED;
 	}
 
-	uint8_t *buffer = _malloc(RNDIS_CONTROL_BUFFER);
-	if(buffer == NULL) {
-		dbg_err("No memory");
-		return USB_ERROR_FAILED;
+	if(rndis_state.receive_buffer == NULL) {
+		rndis_state.receive_buffer = _malloc(RNDIS_CONTROL_BUFFER_SIZE, "inth");
+		if(rndis_state.receive_buffer == NULL) {
+			dbg_err("No memory");
+			return USB_ERROR_FAILED;
+		}
+	} else {
+		dbg_warn("Last received timeouted");
 	}
-	usb_ScheduleDefaultControlTransfer(netinfo.device, &in_setup_buffer, buffer, ctrl_rndis_callback, buffer);
-	poll_interrupt_scheduler();
 
+	usb_ScheduleDefaultControlTransfer(netinfo.device, &in_setup_buffer, rndis_state.receive_buffer, ctrl_rndis_callback, NULL);
 	return USB_SUCCESS;
 }
 
 usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
 								usb_transfer_data_t *data) {
-	(void)transferred; (void)endpoint;  /* Unused parameter */
-
-	_free(data);
+	(void)transferred; (void)endpoint; (void)data;  /* Unused parameter */
 
 	if(status & USB_ERROR_NO_DEVICE) {
 		dbg_warn("Lost connection (ctrl)");
@@ -221,7 +249,7 @@ usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t s
 		return USB_ERROR_FAILED;
 	}
 
-	rndis_ctrl_msg_t *rndis_msg = (rndis_ctrl_msg_t *)data;
+	rndis_ctrl_msg_t *rndis_msg = (rndis_ctrl_msg_t *)rndis_state.receive_buffer;
 	if(rndis_msg->MessageType & CMPLT_TYPE && rndis_msg->MessageType != RNDIS_RESET_CMPLT &&
 	   ((rndis_ctrl_cmplt_t *)rndis_msg)->Status != RNDIS_STATUS_SUCCESS) {
 		dbg_warn("An RNDIS error occurred");
@@ -232,26 +260,31 @@ usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t s
 	switch(rndis_msg->MessageType) {
 		case RNDIS_INIT_CMPLT: {
 			/* Checking everything's OK */
-			const rndis_init_cmplt_t *init_cmplt = (rndis_init_cmplt_t *)data;
+			const rndis_init_cmplt_t *init_cmplt = (rndis_init_cmplt_t *)rndis_state.receive_buffer;
 			if(init_cmplt->MessageLength != sizeof(rndis_init_cmplt_t) || init_cmplt->DeviceFlags != RNDIS_DF_CONNECTIONLESS \
 			|| init_cmplt->MajorVersion != RNDIS_MAJOR_VERSION || init_cmplt->MinorVersion != RNDIS_MINOR_VERSION \
 			|| init_cmplt->MaxPacketsPerTransfer == 0 || init_cmplt->MaxTransferSize < 536 + TCP_HEADERS_SIZE \
 			|| init_cmplt->Medium != RNDIS_MEDIUM_802_3) {
 				send_rndis_reset_msg();
-				return USB_SUCCESS;
+			} else {
+				rndis_state.max_transfer_size = min(init_cmplt->MaxTransferSize, MAX_RNDIS_TRANSFER_SIZE);
+				const uint32_t filter_value = RNDIS_PACKET_TYPE_DIRECTED | RNDIS_PACKET_TYPE_ALL_MULTICAST |
+											  RNDIS_PACKET_TYPE_BROADCAST | RNDIS_PACKET_TYPE_PROMISCUOUS;
+				send_rndis_set_msg(OID_GEN_CURRENT_PACKET_FILTER, &filter_value, sizeof(uint32_t));
 			}
-
-			rndis_state.max_transfer_size = min(init_cmplt->MaxTransferSize, MAX_RNDIS_TRANSFER_SIZE);
-			const uint32_t filter_value = RNDIS_PACKET_TYPE_DIRECTED | RNDIS_PACKET_TYPE_ALL_MULTICAST |
-										  RNDIS_PACKET_TYPE_BROADCAST | RNDIS_PACKET_TYPE_PROMISCUOUS;
-			send_rndis_set_msg(OID_GEN_CURRENT_PACKET_FILTER, &filter_value, sizeof(uint32_t));
 			break;
 		}
 		case RNDIS_QUERY_CMPLT:
 			dbg_err("Not supported yet");
 			break;
 		case RNDIS_SET_CMPLT:  /* Only one Set for now */
-			netinfo.state = STATE_RNDIS_DATA_INIT;
+			/* If an RNDIS reset, we don't want to make DHCP again */
+			if(rndis_state.is_resetting) {
+				netinfo.state = STATE_NETWORK_CONFIGURED;
+				rndis_state.is_resetting = false;
+			} else {
+				netinfo.state = STATE_RNDIS_DATA_INIT;
+			}
 			/*
 				Send Keepalives every SEND_KEEPALIVE_INTERVAL (5s).
 				For now, keepalives are sent no matter if messages have been received in between.
@@ -278,7 +311,7 @@ usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t s
 			send_rndis_keepalive_cmplt(rndis_msg->RequestId);
 			break;
 		case RNDIS_KEEPALIVE_CMPLT:
-			rndis_state.has_keepalive_cmplt_received = true;
+			rndis_state.not_received_keepalives_filter = 0;
 			break;
 	/*
 		case RNDIS_PACKET_MSG:
@@ -292,16 +325,37 @@ usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t s
 			break;
 	}
 
+	_free(rndis_state.receive_buffer);
+	rndis_state.receive_buffer = NULL;
 	return USB_SUCCESS;
 }
 
-void poll_interrupt_scheduler() {
-	usb_ScheduleInterruptTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_wc_in),
-								  rndis_state.interrupt_buffer, 8, interrupt_handler, NULL);
+scheduler_status_t poll_interrupt_scheduler(web_callback_data_t *user_data) {
+	(void)user_data;  /* should be POLL_INTERRUPT_SCHED_ID */
+	usb_error_t status = usb_ScheduleInterruptTransfer(usb_GetDeviceEndpoint(netinfo.device, netinfo.ep_wc_in),
+														rndis_state.interrupt_buffer, 8, interrupt_handler, NULL);
+
+	if(status != USB_SUCCESS) {
+		return SCHEDULER_AGAIN;
+	}
+
+	return SCHEDULER_DESTROY;
 }
 
-web_status_t send_keepalive_scheduler(web_callback_data_t *user_data) {
+scheduler_status_t send_keepalive_scheduler(web_callback_data_t *user_data) {
 	(void)user_data;  /* should be SEND_KEEPALIVE_SCHED_ID */
 	send_rndis_keepalive_msg();
-	return WEB_SUCCESS;
+	return SCHEDULER_AGAIN;
+}
+
+void free_rndis_data() {
+	/* Free receive buffer */
+	if(rndis_state.receive_buffer != NULL) {
+		_free(rndis_state.receive_buffer);
+		rndis_state.receive_buffer = NULL;
+	}
+
+	/* Free send buffers */
+	free_allocated_memory_list(rndis_state.send_buffer_list);
+	rndis_state.send_buffer_list = NULL;
 }

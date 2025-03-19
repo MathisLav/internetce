@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include <internet.h>
 
+#include "scheduler.h"
+
 
 #define DEFAULT_MAC_ADDRESS {0xEA, 0xA5, 0x59, 0x9C, 0xC1, 0x00}
 
@@ -43,7 +45,15 @@ typedef struct network_info {
 	uint32_t DNS_IP_addr;
 	uint32_t IP_addr;
 	dhcp_state_t dhcp_cur_state;
+	size_t in_buffer_size;
+	void *temp_usb_buffer;	/* Pointer to a temporary buffer, allocated to reassemble splitted USB packet */
+	size_t received_size;	/* How many bytes in temp_usb_buffer are already received */
 } network_info_t;
+
+typedef struct allocated_memory {
+	struct allocated_memory *next;
+	uint8_t memory[];
+} allocated_memory_t;
 
 
 /**
@@ -62,9 +72,13 @@ void reset_netinfo_struct();
 
 void *_alloc_msg_buffer(void *data, size_t length_data, size_t headers_total_size, bool has_eth_header);
 
-web_status_t send_packet_scheduler(web_callback_data_t *user_data);
+scheduler_status_t send_packet_scheduler(web_callback_data_t *user_data);
 
 void send_packet_destructor(web_callback_data_t *user_data);
+
+void free_allocated_memory(allocated_memory_t **list, allocated_memory_t *allocated);
+
+void free_allocated_memory_list(allocated_memory_t *memory_list);
 
 inline uint32_t htonl(uint32_t val) {
 	uint8_t *pval = (uint8_t *)&val;
@@ -87,6 +101,8 @@ inline uint24_t htonl24(uint24_t val) {
 #define ntohl htonl
 #define ntohs htons
 #define ntohl24 htonl24
+
+#define force_send_queue() dispatch_time_events()
 
 
 #endif // INTERNET_CORE

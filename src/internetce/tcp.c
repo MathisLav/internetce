@@ -44,7 +44,122 @@ web_status_t web_SendRawTCPSegment(void *data, size_t length_data, uint32_t ip_d
 	return queued ? WEB_SUCCESS : WEB_NOT_ENOUGH_MEM;
 }
 
-web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length, uint16_t flags) {
+web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t length) {
+	return internal_deliver_segment(tcp_exch, data, length, FLAG_TCP_ACK | FLAG_TCP_PSH);
+}
+
+tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_appli_callback_t *callback,
+							   web_callback_data_t *user_data) {
+	if(!rng_IsAvailable()) {
+		dbg_err("Random module not ready yet");
+		return NULL;
+	}
+
+	/* Core structure of a tcp exchange */
+	tcp_exchange_list_t *tcp_exch_list = _malloc(sizeof(tcp_exchange_list_t), "tcpx");
+	if(tcp_exch_list == NULL) {
+		return NULL;
+	}
+	tcp_exchange_t *tcp_exch = &tcp_exch_list->tcp_exch;
+	memset(tcp_exch, 0, sizeof(tcp_exchange_t));
+	tcp_exch->ip_dst = ip_dst;
+	tcp_exch->port_src = web_RequestPort();
+	tcp_exch->port_dst = port_dst;
+	rng_Random32b(&tcp_exch->cur_sn);  /* Should not fail (if(!rng_IsAvailable())... above) */
+	tcp_exch->beg_sn = tcp_exch->cur_sn;
+	tcp_exch->tcp_state = TCP_STATE_SYN_SENT;
+	tcp_exch->callback = callback;
+	tcp_exch->user_data = user_data;
+	tcp_exch->send_mss = DEFAULT_MSS;
+	tcp_exch_list->next = tcp_exchanges;
+	tcp_exchanges = tcp_exch_list;
+
+    /* Initiating connection */
+	web_status_t ret_val = web_ListenPort(tcp_exch->port_src, fetch_conntrack_tcp, tcp_exch);
+	if(ret_val != WEB_SUCCESS) {
+		_free(tcp_exch_list);
+		return NULL;
+	}
+	ret_val = internal_deliver_segment(tcp_exch, NULL, 0, FLAG_TCP_SYN);
+	if(ret_val != WEB_SUCCESS) {
+		web_UnlistenPort(tcp_exch->port_src);
+		_free(tcp_exch_list);
+		return NULL;
+	}
+
+	/* Blocking until it receives an SYN/ACK */
+	bool is_timeout = false;
+	ret_val = delay_event(TIMEOUT_NET * 1000, boolean_scheduler, boolean_destructor, &is_timeout);
+	if(ret_val != WEB_SUCCESS) {
+		web_UnlistenPort(tcp_exch->port_src);
+		_free(tcp_exch_list);
+		return NULL;
+	}
+	while(tcp_exch->tcp_state != TCP_STATE_ESTABLISHED) {
+		web_WaitForEvents();
+		if(is_timeout) {
+			dbg_info("TCP connect timeouted");
+			schedule_free_exchange(tcp_exch, 0);
+			return NULL;
+		}
+		if(tcp_exch->tcp_state == TCP_STATE_CLOSED) {
+			remove_event(&is_timeout);
+			schedule_free_exchange(tcp_exch, 0);
+			return NULL;
+		}
+	}
+	remove_event(&is_timeout);
+	force_send_queue();
+	
+	return tcp_exch;
+}
+
+web_status_t web_TCPClose(tcp_exchange_t *tcp_exch, bool is_abort) {
+	web_status_t ret_val = WEB_SUCCESS;
+	if(tcp_exch->tcp_state == TCP_STATE_CLOSED) {
+		/* Already received an RST from the server, _freeing memory */
+		schedule_free_exchange(tcp_exch, 0);
+	} else if(tcp_exch->tcp_state < TCP_STATE_ESTABLISHED) {
+		/* Closing in a non-initialzed state */
+		ret_val = web_SendRawTCPSegment(NULL, 0, tcp_exch->ip_dst, tcp_exch->port_src, tcp_exch->port_dst, tcp_exch->cur_sn,
+							  			0, FLAG_TCP_RST, 0, NULL);
+		tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
+		ret_val = schedule_free_exchange(tcp_exch, TIMEOUT_TIME_WAIT);
+	} else if(is_abort) {
+		/* The user asked to abort the connection (something went wrong on its side) */
+		flush_sending_queue(tcp_exch);
+		internal_deliver_segment(tcp_exch, NULL, 0, FLAG_TCP_RST | FLAG_TCP_ACK);
+		tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
+		ret_val = schedule_free_exchange(tcp_exch, TIMEOUT_TIME_WAIT);
+	} else if(tcp_exch->tcp_state == TCP_STATE_ESTABLISHED || tcp_exch->tcp_state == TCP_STATE_CLOSE_WAIT) {
+		/* Normal closing */
+		ret_val = internal_deliver_segment(tcp_exch, NULL, 0, FLAG_TCP_FIN | FLAG_TCP_ACK);
+		switch(tcp_exch->tcp_state) {
+			case TCP_STATE_ESTABLISHED:
+				tcp_exch->tcp_state = TCP_STATE_FIN_WAIT_1;
+				break;
+			case TCP_STATE_CLOSE_WAIT:
+				tcp_exch->tcp_state = TCP_STATE_LAST_ACK;
+				break;
+			default:
+				break;
+		}
+	}
+	/*
+	 * Unlike what the RFC recommends, the "Read socket" is also closed in TCPCLOSE.
+	 * This is beacause application must free the data related to the connection at some time or another.
+	 * It would be hard for it to keep track of opened connections if data were freed at an unpredictable time.
+	 */
+	tcp_exch->callback = NULL;
+	return ret_val;
+}
+
+
+/**********************************************************************************************************************\
+ *                                                  Private functions                                                 *
+\**********************************************************************************************************************/
+
+web_status_t internal_deliver_segment(tcp_exchange_t *tcp_exch, void *data, size_t length, uint16_t flags) {
 	/* Handling error cases */
 	if(tcp_exch->tcp_state == TCP_STATE_CLOSED) {
 		return WEB_ERROR_FAILED;
@@ -78,7 +193,7 @@ web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t 
 		if(queued == NULL) {
 			return WEB_NOT_ENOUGH_MEM;
 		}
-		pushed_seg_list_t *new_seg = _malloc(sizeof(pushed_seg_list_t));
+		pushed_seg_list_t *new_seg = _malloc(sizeof(pushed_seg_list_t), "tcpd");
 		if(new_seg == NULL) {
 			web_PopMessage(queued);
 			return WEB_NOT_ENOUGH_MEM;
@@ -103,127 +218,6 @@ web_status_t web_DeliverTCPSegment(tcp_exchange_t *tcp_exch, void *data, size_t 
 
 	return WEB_SUCCESS;
 }
-
-tcp_exchange_t *web_TCPConnect(uint32_t ip_dst, web_port_t port_dst, web_appli_callback_t *callback,
-							   web_callback_data_t *user_data) {
-	if(!rng_IsAvailable()) {
-		dbg_err("Random module not ready yet");
-		return NULL;
-	}
-
-	/* Core structure of a tcp exchange */
-	tcp_exchange_list_t *tcp_exch_list = _malloc(sizeof(tcp_exchange_list_t));
-	if(tcp_exch_list == NULL) {
-		return NULL;
-	}
-	tcp_exchange_t *tcp_exch = &tcp_exch_list->tcp_exch;
-	memset(tcp_exch, 0, sizeof(tcp_exchange_t));
-	tcp_exch->ip_dst = ip_dst;
-	tcp_exch->port_src = web_RequestPort();
-	tcp_exch->port_dst = port_dst;
-	rng_Random32b(&tcp_exch->cur_sn);  // Should not fail (if(!rng_IsAvailable())... above)
-	tcp_exch->beg_sn = tcp_exch->cur_sn;
-	tcp_exch->tcp_state = TCP_STATE_SYN_SENT;
-	tcp_exch->callback = callback;
-	tcp_exch->user_data = user_data;
-	tcp_exch->send_mss = DEFAULT_MSS;
-	tcp_exch_list->next = tcp_exchanges;
-	tcp_exchanges = tcp_exch_list;
-
-    /* Initiating connection */
-	web_status_t ret_val = web_ListenPort(tcp_exch->port_src, fetch_conntrack_tcp, tcp_exch);
-	if(ret_val != WEB_SUCCESS) {
-		_free(tcp_exch_list);
-		return NULL;
-	}
-	ret_val = web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_SYN);
-	if(ret_val != WEB_SUCCESS) {
-		web_UnlistenPort(tcp_exch->port_src);
-		_free(tcp_exch_list);
-		return NULL;
-	}
-
-	/* Blocking until it receives an SYN/ACK */
-	bool is_timeout = false;
-	ret_val = delay_event(TIMEOUT_NET * 1000, boolean_scheduler, boolean_destructor, &is_timeout);
-	if(ret_val != WEB_SUCCESS) {
-		web_UnlistenPort(tcp_exch->port_src);
-		_free(tcp_exch_list);
-		return NULL;
-	}
-	while(tcp_exch->tcp_state != TCP_STATE_ESTABLISHED) {
-		web_WaitForEvents();
-		if(is_timeout || tcp_exch->tcp_state == TCP_STATE_CLOSED) {
-			time_wait_destructor(tcp_exch);
-			return NULL;
-		}
-	}
-	remove_event(&is_timeout);
-	
-	return tcp_exch;
-}
-
-web_status_t web_TCPClose(tcp_exchange_t *tcp_exch, bool is_abort) {
-	web_status_t ret_val = WEB_SUCCESS;
-	if(tcp_exch->tcp_state == TCP_STATE_CLOSED) {
-		/* Already received an RST from the server, _freeing memory */
-		time_wait_destructor(tcp_exch);
-	} else if(tcp_exch->tcp_state < TCP_STATE_ESTABLISHED) {
-		/* Closing in a non-initialzed state */
-		ret_val = web_SendRawTCPSegment(NULL, 0, tcp_exch->ip_dst, tcp_exch->port_src, tcp_exch->port_dst, tcp_exch->cur_sn,
-							  			0, FLAG_TCP_RST, 0, NULL);
-		if(ret_val != WEB_SUCCESS) {
-			time_wait_destructor(tcp_exch);
-			return ret_val;
-		} else {
-			tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
-			ret_val = delay_event(TIMEOUT_TIME_WAIT * 1000, time_wait_scheduler, time_wait_destructor, tcp_exch);
-			if(ret_val != WEB_SUCCESS) {
-				time_wait_destructor(tcp_exch);
-				return ret_val;
-			}
-		}
-	} else if(is_abort) {
-		/* The user asked to abort the connection (something went wrong on its side) */
-		flush_sending_queue(tcp_exch);
-		ret_val = web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_RST | FLAG_TCP_ACK);
-		if(ret_val != WEB_SUCCESS) {
-			time_wait_destructor(tcp_exch);
-			return ret_val;
-		} else {
-			tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
-			ret_val = delay_event(TIMEOUT_TIME_WAIT * 1000, time_wait_scheduler, time_wait_destructor, tcp_exch);
-			if(ret_val != WEB_SUCCESS) {
-				time_wait_destructor(tcp_exch);
-				return ret_val;
-			}
-		}
-	} else if(tcp_exch->tcp_state == TCP_STATE_ESTABLISHED || tcp_exch->tcp_state == TCP_STATE_CLOSE_WAIT) {
-		/* Normal closing */
-		ret_val = web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_FIN | FLAG_TCP_ACK);
-		if(ret_val != WEB_SUCCESS) {
-			time_wait_destructor(tcp_exch);
-			return ret_val;
-		}
-		switch(tcp_exch->tcp_state) {
-			case TCP_STATE_ESTABLISHED:
-				tcp_exch->tcp_state = TCP_STATE_FIN_WAIT_1;
-				break;
-			case TCP_STATE_CLOSE_WAIT:
-				tcp_exch->tcp_state = TCP_STATE_LAST_ACK;
-				break;
-			default:
-				break;
-		}
-	}
-	tcp_exch->callback = NULL;
-	return ret_val;
-}
-
-
-/**********************************************************************************************************************\
- *                                                  Private functions                                                 *
-\**********************************************************************************************************************/
 
 void fallback_no_memory(tcp_exchange_t *tcp_exch) {
 	/* Fallback in case of lack of memory, so not using any malloc in there (no sending of segment etc) */
@@ -271,8 +265,7 @@ web_status_t fetch_ack(tcp_exchange_t *tcp_exch, uint32_t ackn) {
 					break;
 				case TCP_STATE_CLOSING:
 					tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
-					web_status_t ret_val = delay_event(TIMEOUT_TIME_WAIT * 1000, time_wait_scheduler,
-													   time_wait_destructor, tcp_exch);
+					web_status_t ret_val = schedule_free_exchange(tcp_exch, TIMEOUT_TIME_WAIT);
 					if(ret_val != WEB_SUCCESS) {
 						/* OK because user has already closed the connection */
 						is_dirty = true;
@@ -328,7 +321,15 @@ msg_queue_t *_recursive_PushTCPSegment(void *buffer, void *data, size_t length_d
 
 void flush_tcp_connections() {
 	while(tcp_exchanges != NULL) {
-		time_wait_destructor(&tcp_exchanges->tcp_exch);
+		/* 
+		 * The time_wait_destructor might already be scheduled.
+		 * If so, remove the event thus triggering the destructor.
+		 * Otherwise, calling manually the destructor.
+		 * This is done so to prevent flush_event_list from calling the destructor whereas the tcp_exch has already been freed 
+		 */
+		if(remove_event(&tcp_exchanges->tcp_exch) != WEB_SUCCESS) {
+			time_wait_destructor(&tcp_exchanges->tcp_exch);
+		}
 	}
 }
 
@@ -359,18 +360,23 @@ void flush_receiving_queue(tcp_exchange_t *tcp_exch) {
 	tcp_exch->in_segments = NULL;
 }
 
-web_status_t time_wait_scheduler(web_callback_data_t *user_data) {
+scheduler_status_t time_wait_scheduler(web_callback_data_t *user_data) {
 	(void)user_data;  /* Unsed parameter */
 	/*
 		No Operation.
-		Everything is done in the destructor, so the flush_event_list function _frees all data structures too.
+		Everything is done in the destructor, so the flush_event_list function frees all data structures too.
 	*/
-	return WEB_SUCCESS;
+	return SCHEDULER_DESTROY;
 }
 
 void time_wait_destructor(web_callback_data_t *user_data) {
 	tcp_exchange_t *tcp_exch = (tcp_exchange_t *)user_data;
 	dbg_info("Freeing port %x", tcp_exch->port_src);
+
+	/* Won't be called if user has already called web_TCPClose */
+	if(tcp_exch->callback != NULL) {
+		tcp_exch->callback(tcp_exch->port_src, LINK_MSG_TYPE_RST, NULL, 0, tcp_exch->user_data);
+	}
 
     flush_receiving_queue(tcp_exch);
 
@@ -408,8 +414,10 @@ web_status_t add_in_segment(tcp_exchange_t *tcp_exch, tcp_segment_t *segment, si
 		return WEB_SUCCESS;
 	}
 
-	if(segment->dataOffset_flags & htons(FLAG_TCP_SYN)) {
+	/* Here because the TCP header (thus the options) is not transmitted to the handler */
+	if(segment->dataOffset_flags & htons(FLAG_TCP_SYN) && tcp_exch->beg_ackn == 0) {
 		tcp_exch->beg_ackn = htonl(segment->seq_number);
+		tcp_exch->cur_ackn = tcp_exch->beg_ackn;
 
 		/* Trying to find relevant options (such as MSS) */
 		uint8_t *options_start = (uint8_t *)segment + sizeof(tcp_segment_t);
@@ -418,7 +426,7 @@ web_status_t add_in_segment(tcp_exchange_t *tcp_exch, tcp_segment_t *segment, si
 		while((size_t)(options_ptr - options_start) < opt_size && *options_ptr != 0x00) {
 			if(*options_ptr == TCP_OPTION_MSS && *(options_ptr + 1) == 0x04) {
 				tcp_exch->send_mss = htons(*(uint16_t *)(options_ptr + 2));
-				dbg_info("Send MSS: %u", tcp_exch->send_mss);
+				dbg_verb("Send MSS: %u", tcp_exch->send_mss);
 			} else if(*options_ptr > 0x01) {
 				dbg_info("Unsupported option: 0x%x", *options_ptr);
 			}
@@ -432,14 +440,14 @@ web_status_t add_in_segment(tcp_exchange_t *tcp_exch, tcp_segment_t *segment, si
 
 	void *response = NULL;
 	if(payload_length != 0) {
-		response = _malloc(payload_length);
+		response = _malloc(payload_length, "tcpp");
 		if(!response) {
 			dbg_err("No memory");
 			return WEB_NOT_ENOUGH_MEM;
 		}
 		memcpy(response, payload, payload_length);
 	}
-	tcp_segment_list_t *new_segment_item = _malloc(sizeof(tcp_segment_list_t));
+	tcp_segment_list_t *new_segment_item = _malloc(sizeof(tcp_segment_list_t), "tcps");
 	if(!new_segment_item) {
 		dbg_err("No memory");
 		return WEB_NOT_ENOUGH_MEM;
@@ -480,14 +488,15 @@ web_status_t add_in_segment(tcp_exchange_t *tcp_exch, tcp_segment_t *segment, si
 	}
 
 	tcp_segment_list_t *seg_to_ack = tcp_exch->in_segments;
-	while(seg_to_ack->next && seg_to_ack->relative_sn + get_segment_sn_length(seg_to_ack->pl_length, seg_to_ack->flags) == \
-		  seg_to_ack->next->relative_sn) {
-		seg_to_ack = seg_to_ack->next;
+	if(seg_to_ack->relative_sn == tcp_exch->cur_ackn - tcp_exch->beg_ackn) {
+		while(seg_to_ack->next && seg_to_ack->relative_sn + get_segment_sn_length(seg_to_ack->pl_length, seg_to_ack->flags) ==
+			  seg_to_ack->next->relative_sn) {
+			seg_to_ack = seg_to_ack->next;
+		}
+		tcp_exch->cur_ackn = tcp_exch->beg_ackn + seg_to_ack->relative_sn + get_segment_sn_length(
+			seg_to_ack->pl_length,
+			seg_to_ack->flags);
 	}
-	tcp_exch->cur_ackn = tcp_exch->beg_ackn + seg_to_ack->relative_sn + get_segment_sn_length(
-		seg_to_ack->pl_length,
-		seg_to_ack->flags);
-
 	return WEB_SUCCESS;
 }
 
@@ -512,7 +521,6 @@ web_status_t send_rst_segment(uint32_t ip_dst, tcp_segment_t *received, size_t l
 web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, size_t length,
 								 web_callback_data_t *user_data) {
 	if(protocol != TCP_PROTOCOL) {
-		dbg_warn("Received a non-TCP packet on a TCP connection");
 		return WEB_SUCCESS;
 	}
 
@@ -541,7 +549,7 @@ web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, 
 			is_valid = false;
 		}
 		if(!is_valid) {
-			web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_ACK);
+			internal_deliver_segment(tcp_exch, NULL, 0, FLAG_TCP_ACK);
 			return WEB_ERROR_FAILED;
 		}
 	} else {  /* If the connection is in a non-synchronized state (during the 3-way handshake) */
@@ -549,6 +557,7 @@ web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, 
 			dbg_warn("Invalid ACK (no-syn)");
 			send_rst_segment(tcp_exch->ip_dst, (tcp_segment_t *)data, length);
 			tcp_exch->tcp_state = TCP_STATE_CLOSED;
+			// TODO ça crashe ?
 			return WEB_ERROR_FAILED;
 		}
 	}
@@ -579,6 +588,9 @@ web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, 
 
 		/* Handle TCP flags (might call the appli callback) */
 		ret_val = fetch_tcp_flags(cur_seg, tcp_exch);
+		if(ret_val != WEB_SUCCESS) {  /* an RST or others */
+			return ret_val;
+		}
 
 		tcp_exch->in_segments = cur_seg->next;
 		if(cur_seg->payload) {
@@ -594,7 +606,7 @@ web_status_t fetch_conntrack_tcp(web_port_t port, uint8_t protocol, void *data, 
 
 	/* Send an ACK if any data has been submitted to the appli layer */
 	if(is_sent_to_appli && ret_val == WEB_SUCCESS) {
-		ret_val = web_DeliverTCPSegment(tcp_exch, NULL, 0, FLAG_TCP_ACK);
+		ret_val = internal_deliver_segment(tcp_exch, NULL, 0, FLAG_TCP_ACK);
 		if(ret_val != WEB_SUCCESS) {
 			fallback_no_memory(tcp_exch);
 			return ret_val;
@@ -608,13 +620,13 @@ web_status_t fetch_raw_tcp_segment(tcp_segment_t *seg, size_t length, uint32_t i
 	if(!transport_checksum((uint8_t*)seg, length, ip_src, ip_dst, TCP_PROTOCOL)) {
 		const int nb_matches = call_callbacks(TCP_PROTOCOL, seg, length, htons(seg->port_dst));
 		if(nb_matches <= 0) {
-			dbg_warn("No TCP callback for port %u", htons(seg->port_dst));
+			dbg_warn("No TCP callback for port %x", htons(seg->port_dst));
 			send_rst_segment(ip_src, seg, length);
 		}
 		return WEB_SUCCESS;
 	} else {
-		dbg_warn("Bad checksumed TCP packet");
-		return WEB_ERROR_FAILED;
+		dbg_warn("Bad checksumed TCP packet: %u", length);
+		return WEB_NOT_ENOUGH_MEM;
 	}
 }
 
@@ -626,12 +638,13 @@ web_status_t fetch_tcp_flags(const tcp_segment_list_t *tcp_seg, tcp_exchange_t *
 
 	/* If RST */
 	if(tcp_seg->flags & htons(FLAG_TCP_RST)) {
-		dbg_warn("RST received");
+		dbg_warn("TCP RST received");
+		tcp_exch->tcp_state = TCP_STATE_CLOSED;
+		flush_sending_queue(tcp_exch);
 		if(tcp_exch->callback != NULL) {
 			tcp_exch->callback(tcp_exch->port_src, LINK_MSG_TYPE_RST, NULL, 0, tcp_exch->user_data);
 		}
-		tcp_exch->tcp_state = TCP_STATE_CLOSED;
-		flush_sending_queue(tcp_exch);
+		/* Warn: user might have called web_TCPClose, so tcp_exch is undetermined */
 		return WEB_CONNECTION_TERMINATION_ERROR;
 	}
 
@@ -646,20 +659,16 @@ web_status_t fetch_tcp_flags(const tcp_segment_list_t *tcp_seg, tcp_exchange_t *
 			case TCP_STATE_FIN_WAIT_2:
 				tcp_exch->tcp_state = TCP_STATE_TIME_WAIT;
 				/* OK because user has already asked for termination */
-				web_status_t ret_val = delay_event(TIMEOUT_TIME_WAIT * 1000, time_wait_scheduler, time_wait_destructor, tcp_exch);
-				if(ret_val != WEB_SUCCESS) {
-					time_wait_destructor(tcp_exch);
-					return ret_val;
-				}
+				schedule_free_exchange(tcp_exch, TIMEOUT_TIME_WAIT);
 				dbg_verb("WAIT2 -> TIME_WAIT");
 			case TCP_STATE_TIME_WAIT:
 				break;
 			case TCP_STATE_ESTABLISHED:
 				dbg_verb("EST -> CLOSE_WAIT");
+				tcp_exch->tcp_state = TCP_STATE_CLOSE_WAIT;
 				if(tcp_exch->callback != NULL) {
 					tcp_exch->callback(tcp_exch->port_src, LINK_MSG_TYPE_FIN, NULL, 0, tcp_exch->user_data);
 				}
-				tcp_exch->tcp_state = TCP_STATE_CLOSE_WAIT;
 			case TCP_STATE_CLOSE_WAIT:
 				break;
 			default:

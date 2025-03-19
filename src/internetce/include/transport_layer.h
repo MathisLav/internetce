@@ -11,6 +11,14 @@
 
 
 /**
+ * Defines
+ */
+
+#define PORT_LOWER_LIMIT	0x8000	/* Totally randomly chosen numbers */
+#define PORT_UPPER_LIMIT	0xfff0	/* Totally randomly chosen numbers */
+
+
+/**
  * Enums & structs
  */
 
@@ -34,6 +42,8 @@ extern port_list_t *listened_ports;
  */
 
 int call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port);
+
+bool is_port_in_use(web_port_t port);
 
 uint16_t transport_checksum(void *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol);
 

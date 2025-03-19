@@ -9,12 +9,16 @@
 #include <internet.h>
 #include <stdint.h>
 
+#include "core.h"
+
 
 /**
  * Constants
  */
 
-#define RNDIS_CONTROL_BUFFER			64  /* 64 should be enough */
+#define RNDIS_CONTROL_BUFFER_SIZE		64  /* 64 should be enough */
+
+#define RNDIS_THRESHOLD_KEEPALIVE_FILTER	2
 
 #define MAX_RNDIS_TRANSFER_SIZE 		MAX_SEGMENT_SIZE + TCP_HEADERS_SIZE  // 1562B
 
@@ -83,10 +87,13 @@
 /* struct rndis_state: Describe the current RNDIS state machine */
 typedef struct rndis_state {
 	unsigned int cur_request_id;        /* Current request ID */
-	bool has_keepalive_cmplt_received;  /* Check that the previous keepalive message got a response */
+	uint8_t not_received_keepalives_filter;  /* Check that the previous keepalive message got a response */
     uint8_t interrupt_buffer[8];        /* Where to store the response in the interrupt endpoint */
 	usb_control_setup_t ctrl_setup_buffer;
 	size_t max_transfer_size;			/* Max RNDIS message size. The minimum value bewteen host & device's is chosen */
+	bool is_resetting;
+	void *receive_buffer;
+	allocated_memory_t *send_buffer_list;
 } rndis_state_t;
 
 
@@ -98,8 +105,10 @@ msg_queue_t *_recursive_PushRNDISPacket(void *buffer, void *data, size_t length_
 
 void send_control_rndis(void *rndis_msg, size_t length);
 
-usb_error_t out_control_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
-							  		   usb_transfer_data_t *data);
+scheduler_status_t send_control_rndis_scheduler(web_callback_data_t *buffer);
+
+usb_error_t send_control_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
+										usb_transfer_data_t *data);
 
 void init_rndis_exchange();
 
@@ -117,9 +126,11 @@ usb_error_t interrupt_handler(usb_endpoint_t endpoint, usb_transfer_status_t sta
 usb_error_t ctrl_rndis_callback(usb_endpoint_t endpoint, usb_transfer_status_t status, size_t transferred,
 								usb_transfer_data_t *data);
 
-void poll_interrupt_scheduler();
+scheduler_status_t poll_interrupt_scheduler(web_callback_data_t *user_data);
 
-web_status_t send_keepalive_scheduler(web_callback_data_t *user_data);
+scheduler_status_t send_keepalive_scheduler(web_callback_data_t *user_data);
+
+void free_rndis_data();
 
 
 #endif // INTERNET_RNDIS

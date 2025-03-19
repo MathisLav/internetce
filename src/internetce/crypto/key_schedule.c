@@ -8,18 +8,18 @@
 
 web_status_t add_transcript_message(linked_transcript_msg_t **transcript, const void *data, size_t size, tls_sender_t sender) {
     /* Note: Messages are already in the correct order (ordering is expected by the TLS client FSM) */
-    void *buffer = _malloc(size);
+    void *buffer = _malloc(size, "addt");
     if(buffer == NULL) {
         return WEB_NOT_ENOUGH_MEM;
     }
     memcpy(buffer, data, size);
-    linked_transcript_msg_t *adding = _malloc(sizeof(linked_transcript_msg_t));
+    linked_transcript_msg_t *adding = _malloc(sizeof(linked_transcript_msg_t), "ltm");
     if(adding == NULL) {
         _free(buffer);
         return WEB_NOT_ENOUGH_MEM;
     }
     adding->length = size;
-    tls_hs_msg_type_t hs_type = ((tls_handshake_t *)data)->hs_type;
+    tls_hs_msg_type_t hs_type = ((tls_hello_t *)data)->header.hs_type;
     if(hs_type <= TLS_HS_TYPE_SERVER_HELLO) {
         /* Edge case for the way I've chosen to order HS messages... is there any better solution? */
         adding->msg_type = (tls_hs_sender_msg_type_t)hs_type;
@@ -40,8 +40,6 @@ web_status_t add_transcript_message(linked_transcript_msg_t **transcript, const 
     } else {
         *transcript = adding;
     }
-
-    // TODO if HelloRetryRequest (see session ID)...
 
     return WEB_SUCCESS;
 }
@@ -80,7 +78,11 @@ web_status_t compute_early_secret(const linked_transcript_msg_t *transcript, uin
     }
 
     if(binder_key != NULL) {
-        /* No PSK support, so don't care */
+        uint8_t hash_empty_str[CIPHER_SUITE_HASH_SIZE];
+        status = compute_transcript_hash(NULL, 0, hash_empty_str);
+        if(status == WEB_SUCCESS) {
+            status = hkdf_ExpandLabel(secret, "res binder", hash_empty_str, CIPHER_SUITE_HASH_SIZE, binder_key, CIPHER_SUITE_HASH_SIZE);
+        }
     }
     if(client_early_traffic_secret != NULL) {
         /* No PSK support, so don't care */
@@ -103,7 +105,12 @@ web_status_t compute_handshake_secret(const linked_transcript_msg_t *transcript,
     web_status_t status;
     uint8_t hash[CIPHER_SUITE_HASH_SIZE];
     uint8_t secret[CIPHER_SUITE_HASH_SIZE];
-    status = hkdf_Extract(current_secret, CIPHER_SUITE_HASH_SIZE, dhe_ss, dhe_ss_size, secret);
+    if(dhe_ss_size == 0 || dhe_ss == NULL) {
+        uint8_t zero_dhe[CIPHER_SUITE_HASH_SIZE] = {0};
+        status = hkdf_Extract(current_secret, CIPHER_SUITE_HASH_SIZE, zero_dhe, CIPHER_SUITE_HASH_SIZE, secret);
+    } else {
+        status = hkdf_Extract(current_secret, CIPHER_SUITE_HASH_SIZE, dhe_ss, dhe_ss_size, secret);
+    }
     if(status != WEB_SUCCESS) {
         return status;
     }
@@ -162,7 +169,13 @@ web_status_t compute_master_secret(const linked_transcript_msg_t *transcript, ui
         /* Don't care for now */
     }
     if(resumption_master_secret != NULL) {
-        /* Don't care for now */
+        status = compute_transcript_hash(transcript, TLS_HS_CLIENT_FINISHED, hash);
+        if(status == WEB_SUCCESS) {
+            status = hkdf_ExpandLabel(secret, "res master", hash, CIPHER_SUITE_HASH_SIZE, resumption_master_secret, CIPHER_SUITE_HASH_SIZE);
+        }
+        if(status != WEB_SUCCESS) {
+            goto end;
+        }
     }
 
 end:

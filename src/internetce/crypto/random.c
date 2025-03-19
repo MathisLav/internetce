@@ -16,13 +16,13 @@
 
 
 /* Internal state variables */
-static size_t entropy = 0;  // This is actually not entropy but the number of random bytes gathered until now
-static uint8_t entropy_bits;  // Temporary buffer that stores the entropy bits until there are 8 of them
-static uint8_t nb_entropy_bits;  // Number of entropy bits (8 bits => store the byte into entropy_buffer)
-static uint8_t entropy_buffer[ENTROPY_BUFFER_SIZE];  // Buffer that gathers entropy waiting to be fed 
-static uint8_t current_buffer_index;  // Current index in entropy_buffer
-static uint8_t K[CIPHER_SUITE_HASH_SIZE];  // Key used with HMAC
-static uint8_t V[CIPHER_SUITE_HASH_SIZE];  // Current state
+static size_t entropy = 0;  /* This is actually not entropy but the number of random bytes gathered until now */
+static uint8_t entropy_bits;  /* Temporary buffer that stores the entropy bits until there are 8 of them */
+static uint8_t nb_entropy_bits;  /* Number of entropy bits (8 bits => store the byte into entropy_buffer) */
+static uint8_t entropy_buffer[ENTROPY_BUFFER_SIZE];  /* Buffer that gathers entropy waiting to be fed  */
+static uint8_t current_buffer_index;  /* Current index in entropy_buffer */
+static uint8_t K[CIPHER_SUITE_HASH_SIZE];  /* Key used with HMAC */
+static uint8_t V[CIPHER_SUITE_HASH_SIZE];  /* Current state */
 
 void rng_Init() {
     memset(K, 0, CIPHER_SUITE_HASH_SIZE);
@@ -43,7 +43,7 @@ web_status_t rng_Update() {
         return 0;
     }
     if(sha256_IsEnabled()) {
-        return WEB_SHA256_IN_USE;  // SHA256 chip already in use
+        return WEB_SHA256_IN_USE;
     }
 
     const size_t buffer_size = CIPHER_SUITE_HASH_SIZE + 1 + current_buffer_index;
@@ -60,12 +60,12 @@ web_status_t rng_Update() {
     hkdf_HMAC(K, CIPHER_SUITE_HASH_SIZE, buffer, buffer_size, K);
     hkdf_HMAC(K, CIPHER_SUITE_HASH_SIZE, V, CIPHER_SUITE_HASH_SIZE, V);
 
-    // Clearing buffer for security purposes
+    /* Clearing buffer for security purposes */
     memset(buffer, 0, buffer_size);
 
     entropy += current_buffer_index;
     current_buffer_index = 0;
-    dbg_info("Random module seeded");
+    dbg_verb("Random module seeded");
 
     return 0;
 }
@@ -78,9 +78,9 @@ void rng_Feed(const uint8_t seed[], size_t seed_size) {
 
     current_buffer_index += to_be_fed;
 
-    // Only feeding when sufficent amount of entropy is available (for performance)
+    /* Only feeding when sufficent amount of entropy is available (for performance) */
     if(current_buffer_index >= MINIMUM_ENTROPY) {
-        rng_Update();  // Only done if the SHA256 chip is available
+        rng_Update();  /* Only done if the SHA256 chip is available */
     }
 }
 
@@ -131,6 +131,6 @@ web_status_t rng_Random32b(uint32_t *var) {
     if(ret_val == 0) {
         *var = ((uint32_t *)buffer)[0];
     }
-    memset(buffer, 0, 32);  // Clearing buffer for security purposes
+    memset(buffer, 0, 32);  /* Clearing buffer for security purposes */
     return ret_val;
 }

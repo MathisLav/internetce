@@ -67,7 +67,6 @@ def generate_autotest(filename):
 
     for data, hint in TESTED_CASES:
         value = hashlib.sha256(data.encode("utf-8")).digest()
-        print(value)
         json_dict["hashes"][f"case_{hint}"] = {
             "description": f"{hint}",
             "start": hex(0xd40000 + 320*240*2 - 32), "size": "32",

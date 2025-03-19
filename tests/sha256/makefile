@@ -6,7 +6,8 @@
 
 PYTHON = python3
 CEDEV_ROOT = $(call cedev-config --prefix)
-CRYPTO_ROOT = ../../src/internetce/crypto
+INTERNET_ROOT = ../../src/internetce
+CRYPTO_ROOT = $(INTERNET_ROOT)/crypto
 AUTOTESTER_ROM = $(shell echo $$AUTOTESTER_ROM)
 
 # For program compilation
@@ -14,7 +15,7 @@ NAME = SHA256
 COMPRESSED = NO
 ARCHIVED = NO
 EXTRA_ASM_SOURCES = $(CRYPTO_ROOT)/ports.asm
-EXTRA_C_SOURCES = $(CRYPTO_ROOT)/sha256.c
+EXTRA_C_SOURCES = $(INTERNET_ROOT)/debug.c $(CRYPTO_ROOT)/sha256.c
 CFLAGS = -Wall -Wextra -Oz
 CXXFLAGS = -Wall -Wextra -Oz
 

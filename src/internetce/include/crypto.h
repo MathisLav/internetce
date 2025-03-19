@@ -20,7 +20,7 @@
  * 2^13-1 = 2^16 / 8 - 1 = limitation in aes128gcm where the number of bits must not be greater than 2**16-1
  * Taking 2^12 to be safe
  */
-#define AES_MAX_BLOCK_SIZE  (2^12)
+#define AES_MAX_BLOCK_SIZE  (1 << 12)
 #define AES_128_TAG_SIZE    16
 #define AES_128_KEY_SIZE    16
 #define AES_128_IV_SIZE     12

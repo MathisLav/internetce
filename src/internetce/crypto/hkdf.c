@@ -51,7 +51,7 @@ web_status_t hkdf_Expand(const uint8_t prk[], const uint8_t info[], size_t info_
         size_left -= CIPHER_SUITE_HASH_SIZE;
     }
 
-    // Clearing any contextual info on the stack for security purposes
+    /* Clearing any contextual info on the stack for security purposes */
     memset(previous_hash, 0, CIPHER_SUITE_HASH_SIZE);
     memset(context_buffer, 0, max_context_size);
 
@@ -109,14 +109,14 @@ web_status_t hkdf_HMAC(const uint8_t key[], size_t key_size, const uint8_t msg[]
     sha256_Init();
     sha256_Part(i_key_pad, CIPHER_SUITE_BLOCK_SIZE);
     sha256_Part(msg, size);
-    sha256_Hash(dst);  // temp buffer for inner hash
+    sha256_Hash(dst);  /* temp buffer for inner hash */
 
     sha256_Init();
     sha256_Part(o_key_pad, CIPHER_SUITE_BLOCK_SIZE);
     sha256_Part(dst, CIPHER_SUITE_HASH_SIZE);
     sha256_Hash(dst);
 
-    // Clearing any contextual info on the stack for security purposes
+    /* Clearing any contextual info on the stack for security purposes */
     memset(o_key_pad, 0, CIPHER_SUITE_BLOCK_SIZE);
     memset(i_key_pad, 0, CIPHER_SUITE_BLOCK_SIZE);
     memset(padded_key, 0, CIPHER_SUITE_BLOCK_SIZE);

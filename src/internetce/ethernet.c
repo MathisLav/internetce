@@ -43,7 +43,7 @@ msg_queue_t *_recursive_PushEthernetFrame(void *buffer, void *data, size_t lengt
 	const size_t min_payload_size = MIN_ETH_HDR_SIZE - (sizeof(eth_frame_t) + 4);  /* = 46 */
 	if(length_data < min_payload_size) {
 		/* Reallocating so it is 64B large */
-		uint8_t *new_buffer = _malloc(MIN_ETH_HDR_SIZE + sizeof(rndis_packet_msg_t));
+		uint8_t *new_buffer = _malloc(MIN_ETH_HDR_SIZE + sizeof(rndis_packet_msg_t), "eth");
 		if(new_buffer == NULL) {
 			_free(buffer);
 			return NULL;

@@ -57,7 +57,7 @@ extern http_data_list_t *http_data_list;
 uint32_t ip_ascii_to_hex(const char *ipstr);
 
 web_status_t http_request(const char *request_type, const char* url, http_data_t **data, bool keep_http_header,
-                          char *params);
+						  char *params, bool is_https);
 
 web_status_t return_http_data(http_exchange_t *exch);
 

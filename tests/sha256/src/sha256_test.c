@@ -20,7 +20,7 @@
 
 int main(void)
 {
-    uint8_t *out = (uint8_t *)(0xd40000 + 320*240*2 - 32);  // Should be safe enough
+    uint8_t *out = (uint8_t *)(0xd40000 + 320*240*2 - 32);  /* Should be safe enough */
 
     flash_setup();
 

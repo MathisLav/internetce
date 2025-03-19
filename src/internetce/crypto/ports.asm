@@ -88,10 +88,14 @@ _flash_setup:
 port_old:
 .unlock:
     ; Move the unlock sequence under the memory protection range (heapBot)
+	or a, a
+	sbc hl, hl
+	push hl
     ld bc, port_old.end - port_old.start
     push bc
     call __malloc
     pop bc
+	pop de
 	ld (.malloc_target), hl
 	ld (.free_target), hl
     ex de, hl

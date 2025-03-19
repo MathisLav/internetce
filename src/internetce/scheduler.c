@@ -30,7 +30,7 @@ web_status_t schedule(uint24_t every, web_schedule_callback_t *schedule_callback
         dbg_err("schedule has been given bad arguments");
         return WEB_INVALID_ARGUMENTS;
     }
-    schedule_list_t *new_event = _malloc(sizeof(schedule_list_t));
+    schedule_list_t *new_event = _malloc(sizeof(schedule_list_t), "sched");
     if(new_event == NULL) {
         return WEB_NOT_ENOUGH_MEM;
     }
@@ -49,14 +49,14 @@ web_status_t delay_event(uint24_t offset_ms, web_schedule_callback_t *schedule_c
     /*
         Preconditions:
             - user_data is a unique number (among all currently valid events)
-            - offset_ms is in range [1, 44*1000] as counter overflows every ~ 90s
+            - offset_ms is in range [0, 44*1000] as counter overflows every ~ 90s
     */
-    if(offset_ms == 0 || offset_ms > 44 * 1000) {
+    if(offset_ms > 44 * 1000) {
         dbg_err("delay has been given bad arguments");
         return WEB_INVALID_ARGUMENTS;
     }
 
-    schedule_list_t *new_event = _malloc(sizeof(schedule_list_t));
+    schedule_list_t *new_event = _malloc(sizeof(schedule_list_t), "delay");
     if(new_event == NULL) {
         return WEB_NOT_ENOUGH_MEM;
     }
@@ -141,41 +141,33 @@ void insert_event(schedule_list_t *new_event) {
     }
 }
 
-void update_event_time() {
-    schedule_list_t *cur_event = event_list;
-    event_list = cur_event->next;
-    if(cur_event->every != 0) {
-        cur_event->date = usb_GetCounter() + cur_event->every;
-        insert_event(cur_event);
-    } else {
-        if(cur_event->destructor_callback != NULL) {
-            cur_event->destructor_callback(cur_event->user_data);
-         }
-        _free(cur_event);
-    }
-}
-
 web_status_t dispatch_time_events() {
     const uint24_t now = usb_GetCounter();
-    web_status_t status = WEB_SUCCESS;
     schedule_list_t *cur_event;
     while(event_list != NULL && (int24_t)(now - event_list->date) > 0) {
         cur_event = event_list;
-        update_event_time();
+        event_list = cur_event->next;
+        scheduler_status_t status = SCHEDULER_DESTROY;
         if(cur_event->schedule_callback != NULL) {
             status = cur_event->schedule_callback(cur_event->user_data);
         }
-        if(status != WEB_SUCCESS) {
-            return status;
+        if(cur_event->every == 0 || status == SCHEDULER_DESTROY) {
+            if(cur_event->destructor_callback != NULL) {
+                cur_event->destructor_callback(cur_event->user_data);
+            }
+            _free(cur_event);
+        } else {
+            cur_event->date = usb_GetCounter() + cur_event->every;
+            insert_event(cur_event);
         }
     }
     return WEB_SUCCESS;
 }
 
-web_status_t boolean_scheduler(web_callback_data_t *user_data) {
+scheduler_status_t boolean_scheduler(web_callback_data_t *user_data) {
 	bool *is_timeout = (bool *)user_data;
 	*is_timeout = true;
-	return WEB_SUCCESS;
+	return SCHEDULER_DESTROY;
 }
 
 void boolean_destructor(web_callback_data_t *user_data) {

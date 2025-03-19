@@ -20,12 +20,24 @@ port_list_t *listened_ports = NULL;
 \**********************************************************************************************************************/
 
 web_port_t web_RequestPort() {
-	static web_port_t next_port = 0xC000;
-	return next_port ? next_port++ : 0;
+	/* This function search for an unused port, starting from a random port number */
+	const web_port_t starting_port = randInt(PORT_LOWER_LIMIT, PORT_UPPER_LIMIT);
+	web_port_t current_port = starting_port;
+	while(is_port_in_use(current_port)) {
+		if(current_port == PORT_UPPER_LIMIT) {
+			current_port = PORT_LOWER_LIMIT;
+		} else {
+			current_port++;
+		}
+		if(current_port == starting_port) {
+			return 0;
+		}
+	}
+	return current_port;
 }
 
 web_status_t web_ListenPort(web_port_t port, web_port_callback_t *callback, web_callback_data_t *user_data) {
-	port_list_t *new_port = _malloc(sizeof(port_list_t));
+	port_list_t *new_port = _malloc(sizeof(port_list_t), "lport");
 	if(new_port == NULL) {
 		return WEB_NOT_ENOUGH_MEM;
 	}
@@ -76,6 +88,17 @@ int call_callbacks(uint8_t protocol, void *data, size_t length, web_port_t port)
 		cur_listenedPort = cur_listenedPort->next;
 	}
 	return nb_matches;
+}
+
+bool is_port_in_use(web_port_t port) {
+	port_list_t *cur_listenedPort = listened_ports;
+	while(cur_listenedPort) {
+		if(port == cur_listenedPort->port) {
+			return true;
+		}
+		cur_listenedPort = cur_listenedPort->next;
+	}
+	return false;
 }
 
 uint16_t transport_checksum(void *data, size_t length, uint32_t ip_src, uint32_t ip_dst, uint8_t protocol) {

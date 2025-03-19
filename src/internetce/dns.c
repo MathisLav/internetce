@@ -56,7 +56,7 @@ web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, w
 	*(cursor_qry + 2) = 1; /* A (IPv4) */
 	*(cursor_qry + 4) = 1; /* IN (internet) */
 
-	dns_exchange_t *dns_exch = _malloc(sizeof(dns_exchange_t));
+	dns_exchange_t *dns_exch = _malloc(sizeof(dns_exchange_t), "dns");
 	if(dns_exch == NULL) {
 		return WEB_NOT_ENOUGH_MEM;
 	}
@@ -64,7 +64,7 @@ web_status_t web_PushDNSRequest(const char *url, web_dns_callback_t *callback, w
 	dns_exch->port_src = client_port;
 	dns_exch->callback = callback;
 	dns_exch->user_data = user_data;
-	dns_exch->queued_request = web_PushUDPDatagram(query, length_data, netinfo.DNS_IP_addr, client_port, DNS_PORT);
+	dns_exch->queued_request = web_PushUDPDatagram(query, length_data, 0x08080808, client_port, DNS_PORT);
 	if(dns_exch->queued_request == NULL) {
 		_free(dns_exch);
 		return WEB_ERROR_FAILED;
@@ -96,10 +96,10 @@ web_status_t dns_callback(web_port_t port, uint32_t res_ip, web_callback_data_t 
 	return WEB_SUCCESS;
 }
 
-web_status_t dns_timeout_scheduler(web_callback_data_t *user_data) {
+scheduler_status_t dns_timeout_scheduler(web_callback_data_t *user_data) {
 	dns_exchange_t *dns_exch = (dns_exchange_t *)user_data;
 	dns_exch->callback(dns_exch->port_src, 0xffffffff, dns_exch->user_data);
-	return WEB_SUCCESS;
+	return SCHEDULER_DESTROY;
 }
 
 void dns_timeout_destructor(web_callback_data_t *user_data) {
@@ -146,6 +146,6 @@ web_status_t fetch_dns_msg(web_port_t port, uint8_t protocol, void *msg, size_t 
 	}
 
 	ret_val = (*exch->callback)(port, found_ip, exch->user_data);
-	remove_event(exch);  // Deletes all data structures allocated
+	remove_event(exch);  /* Deletes all data structures allocated */
 	return ret_val;
 }

@@ -21,6 +21,8 @@
  * Internal functions prototype
  */
 
+web_status_t internal_deliver_segment(tcp_exchange_t *tcp_exch, void *data, size_t length, uint16_t flags);
+
 int add_tcp_queue(char *data, size_t length, tcp_exchange_t *exchange, uint16_t flags, size_t opt_size,
 				  const uint8_t *options);
 
@@ -47,7 +49,7 @@ void flush_sending_queue(tcp_exchange_t *tcp_exch);
 
 void flush_receiving_queue(tcp_exchange_t *tcp_exch);
 
-web_status_t time_wait_scheduler(web_callback_data_t *user_data);
+scheduler_status_t time_wait_scheduler(web_callback_data_t *user_data);
 
 void time_wait_destructor(web_callback_data_t *user_data);
 
@@ -56,8 +58,10 @@ inline char *get_payload_addr(const tcp_segment_t *seg) {
 }
 
 inline uint32_t get_segment_sn_length(size_t payload_length, uint16_t flags) {
-	return payload_length + (flags & htons(FLAG_TCP_FIN | FLAG_TCP_SYN) ? 1 : 0);
+	return payload_length + (flags & htons(FLAG_TCP_RST | FLAG_TCP_FIN | FLAG_TCP_SYN) ? 1 : 0);
 }
+
+#define schedule_free_exchange(tcp_exch, x) delay_event(x * 1000, time_wait_scheduler, time_wait_destructor, tcp_exch)
 
 
 #endif // INTERNET_TCP
